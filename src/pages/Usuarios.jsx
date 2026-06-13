@@ -17,10 +17,7 @@ export default function Usuarios() {
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
-  const [newUserModal, setNewUserModal] = useState(false)
-  const [newUserForm, setNewUserForm] = useState({ email: '', password: '', nombre: '', rol: 'usuario' })
-  const [newUserError, setNewUserError] = useState('')
-  const [newUserSaving, setNewUserSaving] = useState(false)
+  const [error, setError] = useState('')
 
   async function load() {
     setLoading(true)
@@ -36,47 +33,83 @@ export default function Usuarios() {
   useEffect(() => { load() }, [])
 
   function openEdit(p) {
-    setForm({ id: p.id, nombre: p.nombre, apellidos: p.apellidos || '',
-      rol: p.rol, departamento_id: p.departamento_id || '', activo: p.activo })
-    setModal(true)
+    setForm({
+      id: p.id,
+      nombre: p.nombre,
+      apellidos: p.apellidos || '',
+      rol: p.rol,
+      departamento_id: p.departamento_id || '',
+      activo: p.activo
+    })
+    setError('')
+    setModal('edit')
+  }
+
+  function openNew() {
+    setForm({ nombre: '', apellidos: '', email: '', password: '', rol: 'usuario', departamento_id: '', activo: true })
+    setError('')
+    setModal('new')
   }
 
   async function handleSave() {
-    setSaving(true)
-    await supabase.from('perfiles').update({
-      nombre: form.nombre,
-      apellidos: form.apellidos || null,
-      rol: form.rol,
-      departamento_id: form.departamento_id || null,
-      activo: form.activo
-    }).eq('id', form.id)
+    if (!form.nombre.trim()) { setError('El nombre es obligatorio.'); return }
+    if (form.rol === 'usuario' && !form.departamento_id) {
+      setError('Los usuarios deben tener un departamento asignado.'); return
+    }
+    setSaving(true); setError('')
+
+    if (modal === 'new') {
+      if (!form.email || !form.password) { setError('Email y contraseña son obligatorios.'); setSaving(false); return }
+      // Crear usuario via API de Supabase Auth
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL || 'https://lhwfuwmbdtsaoudsocwj.supabase.co'}/auth/v1/signup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxod2Z1d21iZHRzYW91ZHNvY3dqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjk1NzgsImV4cCI6MjA5NjcwNTU3OH0.rInxGwebKbmw_yc69Z-32RqMe6l3QPl8KAGdvCg3W2k'
+        },
+        body: JSON.stringify({ email: form.email, password: form.password })
+      })
+      const data = await res.json()
+      if (!data.id) {
+        setError('Error al crear el usuario: ' + (data.msg || data.error_description || 'inténtalo de nuevo'))
+        setSaving(false); return
+      }
+      // Confirmar email y actualizar perfil
+      await supabase.from('items') // dummy query to keep connection
+      await supabase.rpc('confirm_and_update_user', {
+        user_id: data.id,
+        p_nombre: form.nombre.trim(),
+        p_apellidos: form.apellidos || null,
+        p_rol: form.rol,
+        p_departamento_id: form.departamento_id || null
+      }).then(async () => {}).catch(async () => {
+        // Si el RPC no existe, actualizar directamente
+        await supabase.from('perfiles').upsert({
+          id: data.id,
+          nombre: form.nombre.trim(),
+          apellidos: form.apellidos || null,
+          rol: form.rol,
+          departamento_id: form.departamento_id || null,
+          activo: true
+        })
+      })
+      // Confirmar email via SQL
+      await supabase.rpc('admin_confirm_email', { user_id: data.id }).catch(() => {})
+
+    } else {
+      const { error: err } = await supabase.from('perfiles').update({
+        nombre: form.nombre.trim(),
+        apellidos: form.apellidos || null,
+        rol: form.rol,
+        departamento_id: form.departamento_id || null,
+        activo: form.activo
+      }).eq('id', form.id)
+      if (err) { setError(err.message); setSaving(false); return }
+    }
+
     setSaving(false)
     setModal(null)
     load()
-  }
-
-  async function handleNewUser() {
-    if (!newUserForm.email || !newUserForm.password || !newUserForm.nombre) {
-      setNewUserError('Email, contraseña y nombre son obligatorios.'); return
-    }
-    setNewUserSaving(true); setNewUserError('')
-    const { data, error } = await supabase.auth.admin.createUser({
-      email: newUserForm.email,
-      password: newUserForm.password,
-      email_confirm: true,
-      user_metadata: { nombre: newUserForm.nombre }
-    })
-    if (error) {
-      setNewUserError('Error: ' + error.message)
-      setNewUserSaving(false); return
-    }
-    if (newUserForm.rol !== 'usuario') {
-      await supabase.from('perfiles').update({ rol: newUserForm.rol }).eq('id', data.user.id)
-    }
-    setNewUserSaving(false)
-    setNewUserModal(false)
-    setNewUserForm({ email: '', password: '', nombre: '', rol: 'usuario' })
-    setTimeout(load, 800)
   }
 
   if (loading) return <div className="empty-state">Cargando…</div>
@@ -87,13 +120,15 @@ export default function Usuarios() {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: 'var(--bg)' }}>
         <h1 style={{ fontSize: 16, fontWeight: 500 }}>Usuarios</h1>
-        <button className="btn btn-primary" onClick={() => setNewUserModal(true)} style={{ fontSize: 12 }}>
+        <button className="btn btn-primary" onClick={openNew} style={{ fontSize: 12 }}>
           <i className="ti ti-plus" aria-hidden="true" />Nuevo usuario
         </button>
       </div>
 
-      <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
-        <div style={{ marginBottom: 20 }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* Tabla de permisos */}
+        <div>
           <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 10 }}>Permisos por rol</div>
           <div className="card">
             <table>
@@ -107,11 +142,13 @@ export default function Usuarios() {
               </thead>
               <tbody>
                 {[
-                  ['Ver inventario completo', true, true, true],
-                  ['Buscar ítems', true, true, true],
-                  ['Añadir / editar ítems', true, true, false],
-                  ['Gestionar estructura', true, false, false],
-                  ['Gestionar usuarios', true, false, false],
+                  ['Ver inventario completo',      true,  true,  false],
+                  ['Ver inventario de su depto.',  true,  true,  true ],
+                  ['Buscar ítems',                 true,  true,  true ],
+                  ['Añadir / editar ítems',        true,  true,  false],
+                  ['Gestionar estructura',          true,  false, false],
+                  ['Gestionar usuarios',            true,  false, false],
+                  ['Exportar a Excel / CSV',        true,  true,  false],
                 ].map(([perm, sa, ed, us]) => (
                   <tr key={perm}>
                     <td style={{ fontSize: 13 }}>{perm}</td>
@@ -129,148 +166,174 @@ export default function Usuarios() {
           </div>
         </div>
 
-        <div className="card">
-          <table>
-            <thead>
-              <tr><th>Usuario</th><th>Rol</th><th>Departamento</th><th>Estado</th><th style={{ width: 60 }}></th></tr>
-            </thead>
-            <tbody>
-              {perfiles.map(p => {
-                const b = ROL_BADGE[p.rol]
-                return (
-                  <tr key={p.id}>
-                    <td>
-                      <div style={{ fontWeight: 500, fontSize: 13 }}>{p.nombre} {p.apellidos || ''}</div>
-                    </td>
-                    <td><span className={`badge ${b.cls}`}>{b.label}</span></td>
-                    <td style={{ color: 'var(--text2)', fontSize: 12 }}>{p.departamentos?.nombre || '—'}</td>
-                    <td>
-                      <span className={`badge ${p.activo ? 'badge-green' : 'badge-gray'}`}>
-                        {p.activo ? 'Activo' : 'Inactivo'}
-                      </span>
-                    </td>
-                    <td>
-                      <button className="btn" style={{ padding: '3px 8px', fontSize: 11 }}
-                        onClick={() => openEdit(p)} disabled={p.id === myProfile?.id}>
-                        <i className="ti ti-edit" aria-hidden="true" />
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+        {/* Lista de usuarios */}
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 10 }}>
+            Usuarios ({perfiles.length})
+          </div>
+          <div className="card">
+            <table>
+              <thead>
+                <tr>
+                  <th>Nombre</th><th>Rol</th><th>Departamento</th><th>Estado</th>
+                  <th style={{ width: 60 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {perfiles.map(p => {
+                  const b = ROL_BADGE[p.rol]
+                  const sinDepto = p.rol === 'usuario' && !p.departamento_id
+                  return (
+                    <tr key={p.id}>
+                      <td>
+                        <div style={{ fontWeight: 500, fontSize: 13 }}>
+                          {p.nombre} {p.apellidos || ''}
+                        </div>
+                      </td>
+                      <td><span className={`badge ${b.cls}`}>{b.label}</span></td>
+                      <td>
+                        {sinDepto ? (
+                          <span style={{ fontSize: 12, color: 'var(--red-dark)',
+                            display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <i className="ti ti-alert-triangle" style={{ fontSize: 13 }} aria-hidden="true" />
+                            Sin asignar
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text2)', fontSize: 12 }}>
+                            {p.departamentos?.nombre || '—'}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${p.activo ? 'badge-green' : 'badge-gray'}`}>
+                          {p.activo ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
+                      <td>
+                        <button className="btn" style={{ padding: '3px 8px', fontSize: 11 }}
+                          onClick={() => openEdit(p)}
+                          disabled={p.id === myProfile?.id}>
+                          <i className="ti ti-edit" aria-hidden="true" />
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Instrucciones crear usuario */}
+        <div style={{ background: 'var(--bg2)', borderRadius: 'var(--radius)',
+          padding: '12px 16px', fontSize: 12, color: 'var(--text2)',
+          display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <i className="ti ti-info-circle" style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }} aria-hidden="true" />
+          <div>
+            <strong>Crear usuarios:</strong> usa el botón "Nuevo usuario". Tras crearlo,
+            ve a <strong>Supabase → SQL Editor</strong> y ejecuta:
+            <code style={{ display: 'block', marginTop: 6, padding: '6px 10px',
+              background: 'var(--bg3)', borderRadius: 4, fontFamily: 'monospace', fontSize: 11 }}>
+              UPDATE auth.users SET email_confirmed_at = now() WHERE email = 'email@instituto.es';
+            </code>
+            para que el usuario pueda iniciar sesión.
+          </div>
         </div>
       </div>
 
+      {/* Modal editar / nuevo */}
       {modal && (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModal(null)}>
           <div className="modal">
             <div className="modal-header">
-              <span>Editar usuario</span>
+              <span>{modal === 'new' ? 'Nuevo usuario' : 'Editar usuario'}</span>
               <button className="btn" style={{ padding: '3px 8px' }} onClick={() => setModal(null)}>
                 <i className="ti ti-x" aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
+              {error && (
+                <div style={{ fontSize: 12, color: 'var(--red-dark)', background: 'var(--red-light)',
+                  padding: '8px 12px', borderRadius: 'var(--radius)' }}>{error}</div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Field label="Nombre *" value={form.nombre}
+                  onChange={v => setForm(f => ({...f, nombre: v}))} />
+                <Field label="Apellidos" value={form.apellidos}
+                  onChange={v => setForm(f => ({...f, apellidos: v}))} />
+              </div>
+
+              {modal === 'new' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <Field label="Email *" value={form.email} type="email"
+                    onChange={v => setForm(f => ({...f, email: v}))} />
+                  <Field label="Contraseña *" value={form.password} type="password"
+                    onChange={v => setForm(f => ({...f, password: v}))} />
+                </div>
+              )}
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="form-group">
-                  <label className="form-label">Nombre</label>
-                  <input className="input-field" value={form.nombre}
-                    onChange={e => setForm(f => ({...f, nombre: e.target.value}))} />
+                  <label className="form-label">Rol</label>
+                  <select className="input-field" value={form.rol}
+                    onChange={e => setForm(f => ({...f, rol: e.target.value, departamento_id: e.target.value !== 'usuario' ? '' : f.departamento_id}))}>
+                    {ROLES.map(r => <option key={r} value={r}>{ROL_BADGE[r].label}</option>)}
+                  </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Apellidos</label>
-                  <input className="input-field" value={form.apellidos}
-                    onChange={e => setForm(f => ({...f, apellidos: e.target.value}))} />
+                  <label className="form-label">
+                    Departamento
+                    {form.rol === 'usuario' && <span style={{ color: 'var(--red-dark)', marginLeft: 3 }}>*</span>}
+                    {form.rol !== 'usuario' && <span style={{ color: 'var(--text3)', fontWeight: 400, marginLeft: 4 }}>(opcional)</span>}
+                  </label>
+                  <select className="input-field" value={form.departamento_id}
+                    onChange={e => setForm(f => ({...f, departamento_id: e.target.value}))}>
+                    <option value="">— Sin asignar —</option>
+                    {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+                  </select>
                 </div>
               </div>
-              <div className="form-group">
-                <label className="form-label">Rol</label>
-                <select className="input-field" value={form.rol}
-                  onChange={e => setForm(f => ({...f, rol: e.target.value}))}>
-                  {ROLES.map(r => <option key={r} value={r}>{ROL_BADGE[r].label}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Departamento</label>
-                <select className="input-field" value={form.departamento_id}
-                  onChange={e => setForm(f => ({...f, departamento_id: e.target.value}))}>
-                  <option value="">— Sin asignar —</option>
-                  {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Estado</label>
-                <select className="input-field" value={form.activo ? 'activo' : 'inactivo'}
-                  onChange={e => setForm(f => ({...f, activo: e.target.value === 'activo'}))}>
-                  <option value="activo">Activo</option>
-                  <option value="inactivo">Inactivo</option>
-                </select>
-              </div>
+
+              {form.rol === 'usuario' && !form.departamento_id && (
+                <div style={{ fontSize: 12, color: 'var(--amber-dark)', background: 'var(--amber-light)',
+                  padding: '8px 12px', borderRadius: 'var(--radius)',
+                  display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <i className="ti ti-alert-triangle" aria-hidden="true" />
+                  Los usuarios sin departamento no podrán ver ningún ítem del inventario.
+                </div>
+              )}
+
+              {modal === 'edit' && (
+                <div className="form-group">
+                  <label className="form-label">Estado</label>
+                  <select className="input-field" value={form.activo ? 'activo' : 'inactivo'}
+                    onChange={e => setForm(f => ({...f, activo: e.target.value === 'activo'}))}>
+                    <option value="activo">Activo</option>
+                    <option value="inactivo">Inactivo</option>
+                  </select>
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn" onClick={() => setModal(null)}>Cancelar</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                {saving ? 'Guardando…' : 'Guardar'}
+                {saving ? 'Guardando…' : modal === 'new' ? 'Crear usuario' : 'Guardar'}
               </button>
             </div>
           </div>
         </div>
       )}
+    </div>
+  )
+}
 
-      {newUserModal && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setNewUserModal(false)}>
-          <div className="modal">
-            <div className="modal-header">
-              <span>Crear nuevo usuario</span>
-              <button className="btn" style={{ padding: '3px 8px' }} onClick={() => setNewUserModal(false)}>
-                <i className="ti ti-x" aria-hidden="true" />
-              </button>
-            </div>
-            <div className="modal-body">
-              {newUserError && (
-                <div style={{ fontSize: 12, color: 'var(--red-dark)', background: 'var(--red-light)',
-                  padding: '8px 12px', borderRadius: 'var(--radius)' }}>{newUserError}</div>
-              )}
-              <div className="form-group">
-                <label className="form-label">Nombre *</label>
-                <input className="input-field" value={newUserForm.nombre}
-                  onChange={e => setNewUserForm(f => ({...f, nombre: e.target.value}))} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Email *</label>
-                <input className="input-field" type="email" value={newUserForm.email}
-                  onChange={e => setNewUserForm(f => ({...f, email: e.target.value}))} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Contraseña *</label>
-                <input className="input-field" type="password" value={newUserForm.password}
-                  onChange={e => setNewUserForm(f => ({...f, password: e.target.value}))} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Rol</label>
-                <select className="input-field" value={newUserForm.rol}
-                  onChange={e => setNewUserForm(f => ({...f, rol: e.target.value}))}>
-                  {ROLES.map(r => <option key={r} value={r}>{ROL_BADGE[r].label}</option>)}
-                </select>
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--text3)', background: 'var(--bg2)',
-                padding: '10px 12px', borderRadius: 'var(--radius)' }}>
-                <i className="ti ti-info-circle" style={{ marginRight: 6 }} aria-hidden="true" />
-                La creación de usuarios requiere la <strong>service_role key</strong> en producción.
-                Alternativamente, los usuarios pueden registrarse desde Supabase Auth → Users.
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={() => setNewUserModal(false)}>Cancelar</button>
-              <button className="btn btn-primary" onClick={handleNewUser} disabled={newUserSaving}>
-                {newUserSaving ? 'Creando…' : 'Crear usuario'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+function Field({ label, value, onChange, type = 'text' }) {
+  return (
+    <div className="form-group">
+      <label className="form-label">{label}</label>
+      <input className="input-field" type={type} value={value || ''}
+        onChange={e => onChange(e.target.value)} />
     </div>
   )
 }

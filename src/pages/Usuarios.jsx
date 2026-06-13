@@ -9,6 +9,9 @@ const ROL_BADGE = {
   usuario:    { cls: 'badge-blue',   label: 'Usuario'    },
 }
 
+const SUPABASE_URL = 'https://lhwfuwmbdtsaoudsocwj.supabase.co'
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxod2Z1d21iZHRzYW91ZHNvY3dqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjk1NzgsImV4cCI6MjA5NjcwNTU3OH0.rInxGwebKbmw_yc69Z-32RqMe6l3QPl8KAGdvCg3W2k'
+
 export default function Usuarios() {
   const { perfil: myProfile } = useAuth()
   const [perfiles, setPerfiles] = useState([])
@@ -18,6 +21,7 @@ export default function Usuarios() {
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [nuevoEmail, setNuevoEmail] = useState(null) // email del último usuario creado
 
   async function load() {
     setLoading(true)
@@ -33,68 +37,55 @@ export default function Usuarios() {
   useEffect(() => { load() }, [])
 
   function openEdit(p) {
-    setForm({
-      id: p.id,
-      nombre: p.nombre,
-      apellidos: p.apellidos || '',
-      rol: p.rol,
-      departamento_id: p.departamento_id || '',
-      activo: p.activo
-    })
-    setError('')
-    setModal('edit')
+    setForm({ id: p.id, nombre: p.nombre, apellidos: p.apellidos || '',
+      rol: p.rol, departamento_id: p.departamento_id || '', activo: p.activo })
+    setError(''); setModal('edit')
   }
 
   function openNew() {
-    setForm({ nombre: '', apellidos: '', email: '', password: '', rol: 'usuario', departamento_id: '', activo: true })
-    setError('')
-    setModal('new')
+    setForm({ nombre: '', apellidos: '', email: '', password: '', rol: 'usuario', departamento_id: '' })
+    setError(''); setNuevoEmail(null); setModal('new')
   }
 
   async function handleSave() {
     if (!form.nombre.trim()) { setError('El nombre es obligatorio.'); return }
     if (form.rol === 'usuario' && !form.departamento_id) {
-      setError('Los usuarios deben tener un departamento asignado.'); return
+      setError('Los usuarios con rol "Usuario" deben tener un departamento asignado.'); return
     }
     setSaving(true); setError('')
 
     if (modal === 'new') {
-      if (!form.email || !form.password) { setError('Email y contraseña son obligatorios.'); setSaving(false); return }
-      // Crear usuario via API de Supabase Auth
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL || 'https://lhwfuwmbdtsaoudsocwj.supabase.co'}/auth/v1/signup`, {
+      if (!form.email || !form.password) {
+        setError('Email y contraseña son obligatorios.'); setSaving(false); return
+      }
+
+      // Crear en Supabase Auth
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxod2Z1d21iZHRzYW91ZHNvY3dqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjk1NzgsImV4cCI6MjA5NjcwNTU3OH0.rInxGwebKbmw_yc69Z-32RqMe6l3QPl8KAGdvCg3W2k'
-        },
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
         body: JSON.stringify({ email: form.email, password: form.password })
       })
       const data = await res.json()
+
       if (!data.id) {
-        setError('Error al crear el usuario: ' + (data.msg || data.error_description || 'inténtalo de nuevo'))
+        setError('Error: ' + (data.msg || data.error_description || JSON.stringify(data)))
         setSaving(false); return
       }
-      // Confirmar email y actualizar perfil
-      await supabase.from('items') // dummy query to keep connection
-      await supabase.rpc('confirm_and_update_user', {
-        user_id: data.id,
-        p_nombre: form.nombre.trim(),
-        p_apellidos: form.apellidos || null,
-        p_rol: form.rol,
-        p_departamento_id: form.departamento_id || null
-      }).then(async () => {}).catch(async () => {
-        // Si el RPC no existe, actualizar directamente
-        await supabase.from('perfiles').upsert({
-          id: data.id,
-          nombre: form.nombre.trim(),
-          apellidos: form.apellidos || null,
-          rol: form.rol,
-          departamento_id: form.departamento_id || null,
-          activo: true
-        })
+
+      // Actualizar perfil con nombre, rol y departamento
+      await supabase.from('perfiles').upsert({
+        id: data.id,
+        nombre: form.nombre.trim(),
+        apellidos: form.apellidos || null,
+        rol: form.rol,
+        departamento_id: form.departamento_id || null,
+        activo: true
       })
-      // Confirmar email via SQL
-      await supabase.rpc('admin_confirm_email', { user_id: data.id }).catch(() => {})
+
+      setSaving(false)
+      setModal(null)
+      setNuevoEmail(form.email) // mostrar aviso con SQL a ejecutar
+      load()
 
     } else {
       const { error: err } = await supabase.from('perfiles').update({
@@ -104,12 +95,11 @@ export default function Usuarios() {
         departamento_id: form.departamento_id || null,
         activo: form.activo
       }).eq('id', form.id)
-      if (err) { setError(err.message); setSaving(false); return }
+      setSaving(false)
+      if (err) { setError(err.message); return }
+      setModal(null)
+      load()
     }
-
-    setSaving(false)
-    setModal(null)
-    load()
   }
 
   if (loading) return <div className="empty-state">Cargando…</div>
@@ -127,6 +117,29 @@ export default function Usuarios() {
 
       <div style={{ flex: 1, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
 
+        {/* Aviso tras crear usuario — muestra SQL a ejecutar */}
+        {nuevoEmail && (
+          <div style={{ background: 'var(--amber-light)', border: '0.5px solid var(--amber-dark)',
+            borderRadius: 'var(--radius)', padding: '14px 16px' }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--amber-dark)', marginBottom: 6 }}>
+              <i className="ti ti-alert-triangle" style={{ marginRight: 6 }} aria-hidden="true" />
+              Usuario creado — falta activarlo
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
+              Ve a <strong>Supabase → SQL Editor</strong> y ejecuta esto para que pueda iniciar sesión:
+            </div>
+            <code style={{ display: 'block', padding: '8px 12px', background: 'var(--bg)',
+              borderRadius: 4, fontFamily: 'monospace', fontSize: 12,
+              border: '0.5px solid var(--border)', userSelect: 'all' }}>
+              UPDATE auth.users SET email_confirmed_at = now() WHERE email = '{nuevoEmail}';
+            </code>
+            <button className="btn" style={{ marginTop: 10, fontSize: 11 }}
+              onClick={() => setNuevoEmail(null)}>
+              Entendido
+            </button>
+          </div>
+        )}
+
         {/* Tabla de permisos */}
         <div>
           <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 10 }}>Permisos por rol</div>
@@ -142,13 +155,13 @@ export default function Usuarios() {
               </thead>
               <tbody>
                 {[
-                  ['Ver inventario completo',      true,  true,  false],
-                  ['Ver inventario de su depto.',  true,  true,  true ],
-                  ['Buscar ítems',                 true,  true,  true ],
-                  ['Añadir / editar ítems',        true,  true,  false],
-                  ['Gestionar estructura',          true,  false, false],
-                  ['Gestionar usuarios',            true,  false, false],
-                  ['Exportar a Excel / CSV',        true,  true,  false],
+                  ['Ver inventario completo',       true,  true,  false],
+                  ['Ver inventario de su depto.',   true,  true,  true ],
+                  ['Buscar ítems',                  true,  true,  true ],
+                  ['Añadir / editar ítems',         true,  true,  false],
+                  ['Exportar a Excel / CSV',         true,  true,  false],
+                  ['Gestionar estructura',           true,  false, false],
+                  ['Gestionar usuarios',             true,  false, false],
                 ].map(([perm, sa, ed, us]) => (
                   <tr key={perm}>
                     <td style={{ fontSize: 13 }}>{perm}</td>
@@ -174,10 +187,7 @@ export default function Usuarios() {
           <div className="card">
             <table>
               <thead>
-                <tr>
-                  <th>Nombre</th><th>Rol</th><th>Departamento</th><th>Estado</th>
-                  <th style={{ width: 60 }}></th>
-                </tr>
+                <tr><th>Nombre</th><th>Rol</th><th>Departamento</th><th>Estado</th><th style={{ width: 60 }}></th></tr>
               </thead>
               <tbody>
                 {perfiles.map(p => {
@@ -185,23 +195,15 @@ export default function Usuarios() {
                   const sinDepto = p.rol === 'usuario' && !p.departamento_id
                   return (
                     <tr key={p.id}>
-                      <td>
-                        <div style={{ fontWeight: 500, fontSize: 13 }}>
-                          {p.nombre} {p.apellidos || ''}
-                        </div>
-                      </td>
+                      <td style={{ fontWeight: 500, fontSize: 13 }}>{p.nombre} {p.apellidos || ''}</td>
                       <td><span className={`badge ${b.cls}`}>{b.label}</span></td>
                       <td>
                         {sinDepto ? (
-                          <span style={{ fontSize: 12, color: 'var(--red-dark)',
-                            display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <i className="ti ti-alert-triangle" style={{ fontSize: 13 }} aria-hidden="true" />
-                            Sin asignar
+                          <span style={{ fontSize: 12, color: 'var(--red-dark)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <i className="ti ti-alert-triangle" style={{ fontSize: 13 }} aria-hidden="true" />Sin asignar
                           </span>
                         ) : (
-                          <span style={{ color: 'var(--text2)', fontSize: 12 }}>
-                            {p.departamentos?.nombre || '—'}
-                          </span>
+                          <span style={{ color: 'var(--text2)', fontSize: 12 }}>{p.departamentos?.nombre || '—'}</span>
                         )}
                       </td>
                       <td>
@@ -211,8 +213,7 @@ export default function Usuarios() {
                       </td>
                       <td>
                         <button className="btn" style={{ padding: '3px 8px', fontSize: 11 }}
-                          onClick={() => openEdit(p)}
-                          disabled={p.id === myProfile?.id}>
+                          onClick={() => openEdit(p)} disabled={p.id === myProfile?.id}>
                           <i className="ti ti-edit" aria-hidden="true" />
                         </button>
                       </td>
@@ -223,25 +224,9 @@ export default function Usuarios() {
             </table>
           </div>
         </div>
-
-        {/* Instrucciones crear usuario */}
-        <div style={{ background: 'var(--bg2)', borderRadius: 'var(--radius)',
-          padding: '12px 16px', fontSize: 12, color: 'var(--text2)',
-          display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-          <i className="ti ti-info-circle" style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }} aria-hidden="true" />
-          <div>
-            <strong>Crear usuarios:</strong> usa el botón "Nuevo usuario". Tras crearlo,
-            ve a <strong>Supabase → SQL Editor</strong> y ejecuta:
-            <code style={{ display: 'block', marginTop: 6, padding: '6px 10px',
-              background: 'var(--bg3)', borderRadius: 4, fontFamily: 'monospace', fontSize: 11 }}>
-              UPDATE auth.users SET email_confirmed_at = now() WHERE email = 'email@instituto.es';
-            </code>
-            para que el usuario pueda iniciar sesión.
-          </div>
-        </div>
       </div>
 
-      {/* Modal editar / nuevo */}
+      {/* Modal */}
       {modal && (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModal(null)}>
           <div className="modal">
@@ -256,23 +241,16 @@ export default function Usuarios() {
                 <div style={{ fontSize: 12, color: 'var(--red-dark)', background: 'var(--red-light)',
                   padding: '8px 12px', borderRadius: 'var(--radius)' }}>{error}</div>
               )}
-
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <Field label="Nombre *" value={form.nombre}
-                  onChange={v => setForm(f => ({...f, nombre: v}))} />
-                <Field label="Apellidos" value={form.apellidos}
-                  onChange={v => setForm(f => ({...f, apellidos: v}))} />
+                <Field label="Nombre *" value={form.nombre} onChange={v => setForm(f => ({...f, nombre: v}))} />
+                <Field label="Apellidos" value={form.apellidos} onChange={v => setForm(f => ({...f, apellidos: v}))} />
               </div>
-
               {modal === 'new' && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  <Field label="Email *" value={form.email} type="email"
-                    onChange={v => setForm(f => ({...f, email: v}))} />
-                  <Field label="Contraseña *" value={form.password} type="password"
-                    onChange={v => setForm(f => ({...f, password: v}))} />
+                  <Field label="Email *" value={form.email} type="email" onChange={v => setForm(f => ({...f, email: v}))} />
+                  <Field label="Contraseña *" value={form.password} type="password" onChange={v => setForm(f => ({...f, password: v}))} />
                 </div>
               )}
-
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="form-group">
                   <label className="form-label">Rol</label>
@@ -284,8 +262,9 @@ export default function Usuarios() {
                 <div className="form-group">
                   <label className="form-label">
                     Departamento
-                    {form.rol === 'usuario' && <span style={{ color: 'var(--red-dark)', marginLeft: 3 }}>*</span>}
-                    {form.rol !== 'usuario' && <span style={{ color: 'var(--text3)', fontWeight: 400, marginLeft: 4 }}>(opcional)</span>}
+                    {form.rol === 'usuario'
+                      ? <span style={{ color: 'var(--red-dark)', marginLeft: 3 }}>*</span>
+                      : <span style={{ color: 'var(--text3)', fontWeight: 400, marginLeft: 4 }}>(opcional)</span>}
                   </label>
                   <select className="input-field" value={form.departamento_id}
                     onChange={e => setForm(f => ({...f, departamento_id: e.target.value}))}>
@@ -294,16 +273,13 @@ export default function Usuarios() {
                   </select>
                 </div>
               </div>
-
               {form.rol === 'usuario' && !form.departamento_id && (
                 <div style={{ fontSize: 12, color: 'var(--amber-dark)', background: 'var(--amber-light)',
-                  padding: '8px 12px', borderRadius: 'var(--radius)',
-                  display: 'flex', alignItems: 'center', gap: 6 }}>
+                  padding: '8px 12px', borderRadius: 'var(--radius)', display: 'flex', alignItems: 'center', gap: 6 }}>
                   <i className="ti ti-alert-triangle" aria-hidden="true" />
-                  Los usuarios sin departamento no podrán ver ningún ítem del inventario.
+                  Sin departamento este usuario no verá ningún ítem.
                 </div>
               )}
-
               {modal === 'edit' && (
                 <div className="form-group">
                   <label className="form-label">Estado</label>
@@ -318,7 +294,7 @@ export default function Usuarios() {
             <div className="modal-footer">
               <button className="btn" onClick={() => setModal(null)}>Cancelar</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                {saving ? 'Guardando…' : modal === 'new' ? 'Crear usuario' : 'Guardar'}
+                {saving ? 'Creando…' : modal === 'new' ? 'Crear usuario' : 'Guardar'}
               </button>
             </div>
           </div>
@@ -332,8 +308,7 @@ function Field({ label, value, onChange, type = 'text' }) {
   return (
     <div className="form-group">
       <label className="form-label">{label}</label>
-      <input className="input-field" type={type} value={value || ''}
-        onChange={e => onChange(e.target.value)} />
+      <input className="input-field" type={type} value={value || ''} onChange={e => onChange(e.target.value)} />
     </div>
   )
 }

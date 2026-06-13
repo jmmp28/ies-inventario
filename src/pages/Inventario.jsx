@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 
@@ -24,20 +24,24 @@ export default function Inventario() {
   const [filtroDept, setFiltroDept] = useState('')
   const [busqueda, setBusqueda] = useState('')
 
-  // Datos para selectores en cascada
+  // Estructura para cascada
   const [departamentos, setDepartamentos] = useState([])
   const [talleres, setTalleres] = useState([])
   const [categorias, setCategorias] = useState([])
   const [subcategorias, setSubcategorias] = useState([])
 
-  // Selectores filtrados según selección
+  // Selectores filtrados
   const [talleresF, setTalleresF] = useState([])
   const [categoriasF, setCategoriasF] = useState([])
   const [subcategoriasF, setSubcategoriasF] = useState([])
 
+  // Selección persistente entre modales
+  const lastSel = useRef(EMPTY_SEL)
+
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState(EMPTY_ITEM)
-  const [sel, setSel] = useState(EMPTY_SEL) // selector en cascada del modal
+  const [sel, setSel] = useState(EMPTY_SEL)
+  const [cantidad, setCantidad] = useState(1)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -68,60 +72,64 @@ export default function Inventario() {
     setTalleres(t.data || [])
     setCategorias(c.data || [])
     setSubcategorias(s.data || [])
+    return { t: t.data||[], c: c.data||[], s: s.data||[] }
   }
 
   useEffect(() => { loadItems(); loadEstructura() }, [])
 
-  // Cascada modal: cuando cambia departamento
+  function applySel(newSel, tAll, cAll, sAll) {
+    const t = tAll || talleres
+    const c = cAll || categorias
+    const s = sAll || subcategorias
+    setSel(newSel)
+    lastSel.current = newSel
+    setTalleresF(newSel.departamento_id ? t.filter(x => x.departamento_id === newSel.departamento_id) : [])
+    setCategoriasF(newSel.taller_id ? c.filter(x => x.taller_id === newSel.taller_id) : [])
+    setSubcategoriasF(newSel.categoria_id ? s.filter(x => x.categoria_id === newSel.categoria_id) : [])
+  }
+
   function onSelDept(id) {
-    setSel({ departamento_id: id, taller_id: '', categoria_id: '', subcategoria_id: '' })
-    setTalleresF(talleres.filter(t => t.departamento_id === id))
-    setCategoriasF([])
-    setSubcategoriasF([])
+    applySel({ departamento_id: id, taller_id:'', categoria_id:'', subcategoria_id:'' })
     setForm(f => ({ ...f, subcategoria_id: '' }))
   }
-
   function onSelTaller(id) {
-    setSel(s => ({ ...s, taller_id: id, categoria_id: '', subcategoria_id: '' }))
-    setCategoriasF(categorias.filter(c => c.taller_id === id))
-    setSubcategoriasF([])
+    applySel({ ...sel, taller_id: id, categoria_id:'', subcategoria_id:'' })
     setForm(f => ({ ...f, subcategoria_id: '' }))
   }
-
   function onSelCategoria(id) {
-    setSel(s => ({ ...s, categoria_id: id, subcategoria_id: '' }))
-    setSubcategoriasF(subcategorias.filter(s => s.categoria_id === id))
+    applySel({ ...sel, categoria_id: id, subcategoria_id:'' })
     setForm(f => ({ ...f, subcategoria_id: '' }))
   }
-
   function onSelSubcat(id) {
-    setSel(s => ({ ...s, subcategoria_id: id }))
+    applySel({ ...sel, subcategoria_id: id })
     setForm(f => ({ ...f, subcategoria_id: id }))
   }
 
-  // Al abrir edición reconstruir selección en cascada
   function openNew() {
     setForm(EMPTY_ITEM)
-    setSel(EMPTY_SEL)
-    setTalleresF([]); setCategoriasF([]); setSubcategoriasF([])
-    setError(''); setModal('new')
+    setCantidad(1)
+    setError('')
+    // Restaurar última selección
+    const s = lastSel.current
+    applySel(s)
+    setForm(f => ({ ...f, subcategoria_id: s.subcategoria_id || '' }))
+    setModal('new')
   }
 
   function openEdit(item) {
     setForm({ ...item })
+    setCantidad(1)
     setError('')
-    // Reconstruir cascada a partir de subcategoria_id
     const subcat = subcategorias.find(s => s.id === item.subcategoria_id)
     const cat = subcat ? categorias.find(c => c.id === subcat.categoria_id) : null
     const taller = cat ? talleres.find(t => t.id === cat.taller_id) : null
     const dept = taller ? departamentos.find(d => d.id === taller.departamento_id) : null
-    const deptId = dept?.id || ''
-    const tallerId = taller?.id || ''
-    const catId = cat?.id || ''
-    setSel({ departamento_id: deptId, taller_id: tallerId, categoria_id: catId, subcategoria_id: item.subcategoria_id || '' })
-    setTalleresF(deptId ? talleres.filter(t => t.departamento_id === deptId) : [])
-    setCategoriasF(tallerId ? categorias.filter(c => c.taller_id === tallerId) : [])
-    setSubcategoriasF(catId ? subcategorias.filter(s => s.categoria_id === catId) : [])
+    applySel({
+      departamento_id: dept?.id || '',
+      taller_id: taller?.id || '',
+      categoria_id: cat?.id || '',
+      subcategoria_id: item.subcategoria_id || ''
+    })
     setModal('edit')
   }
 
@@ -130,17 +138,37 @@ export default function Inventario() {
       setError('Código, nombre y subcategoría son obligatorios.'); return
     }
     setSaving(true); setError('')
-    const payload = { ...form }
-    delete payload.subcategorias
 
-    let err
-    if (modal === 'new') {
-      ;({ error: err } = await supabase.from('items').insert(payload))
+    if (modal === 'new' && cantidad > 1) {
+      // Crear múltiples ítems con código correlativo
+      const codigoBase = form.codigo.replace(/\d+$/, '') // quita números del final
+      const numInicio = parseInt(form.codigo.match(/\d+$/) || ['1'], 10)
+      const digits = (form.codigo.match(/\d+$/) || [''])[0].length || 3
+
+      const rows = Array.from({ length: cantidad }, (_, i) => {
+        const num = numInicio + i
+        const codigo = codigoBase + String(num).padStart(digits, '0')
+        const payload = { ...form, codigo }
+        delete payload.subcategorias
+        return payload
+      })
+
+      const { error: err } = await supabase.from('items').insert(rows)
+      setSaving(false)
+      if (err) { setError(err.message); return }
     } else {
-      ;({ error: err } = await supabase.from('items').update(payload).eq('id', form.id))
+      const payload = { ...form }
+      delete payload.subcategorias
+      let err
+      if (modal === 'new') {
+        ;({ error: err } = await supabase.from('items').insert(payload))
+      } else {
+        ;({ error: err } = await supabase.from('items').update(payload).eq('id', form.id))
+      }
+      setSaving(false)
+      if (err) { setError(err.message); return }
     }
-    setSaving(false)
-    if (err) { setError(err.message); return }
+
     setModal(null)
     loadItems()
   }
@@ -160,9 +188,19 @@ export default function Inventario() {
     return matchEstado && matchDept && matchQ
   })
 
+  // Preview de códigos cuando cantidad > 1
+  const codigoPreview = () => {
+    if (cantidad <= 1 || !form.codigo) return null
+    const base = form.codigo.replace(/\d+$/, '')
+    const numInicio = parseInt(form.codigo.match(/\d+$/) || ['1'], 10)
+    const digits = (form.codigo.match(/\d+$/) || [''])[0].length || 3
+    const first = base + String(numInicio).padStart(digits, '0')
+    const last = base + String(numInicio + cantidad - 1).padStart(digits, '0')
+    return `${first} … ${last}`
+  }
+
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-      {/* Topbar */}
       <div style={{ padding: '16px 24px', borderBottom: '0.5px solid var(--border)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: 'var(--bg)', gap: 12, flexWrap: 'wrap' }}>
@@ -174,7 +212,6 @@ export default function Inventario() {
         )}
       </div>
 
-      {/* Filtros */}
       <div style={{ padding: '12px 24px', borderBottom: '0.5px solid var(--border)',
         background: 'var(--bg)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <input className="input-field" placeholder="Buscar por nombre, código, ubicación…"
@@ -192,7 +229,6 @@ export default function Inventario() {
         </select>
       </div>
 
-      {/* Tabla */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
         {loading ? (
           <div className="empty-state">Cargando…</div>
@@ -252,7 +288,6 @@ export default function Inventario() {
         )}
       </div>
 
-      {/* Modal nuevo / editar */}
       {modal && (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModal(null)}>
           <div className="modal">
@@ -268,52 +303,85 @@ export default function Inventario() {
                   padding: '8px 12px', borderRadius: 'var(--radius)' }}>{error}</div>
               )}
 
-              {/* Datos básicos */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <Field label="Código *" value={form.codigo} onChange={v => setForm(f => ({...f, codigo: v}))} />
+                <Field label="Código *" value={form.codigo} onChange={v => setForm(f => ({...f, codigo: v}))}
+                  placeholder={cantidad > 1 ? 'Ej: INF-HW-001' : ''} />
                 <Field label="Nombre *" value={form.nombre} onChange={v => setForm(f => ({...f, nombre: v}))} />
               </div>
+
+              {/* Cantidad — solo en modo nuevo */}
+              {modal === 'new' && (
+                <div style={{ background: 'var(--bg2)', borderRadius: 'var(--radius)', padding: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div className="form-group" style={{ width: 120 }}>
+                      <label className="form-label">Cantidad</label>
+                      <input className="input-field" type="number" min={1} max={999}
+                        value={cantidad} onChange={e => setCantidad(Math.max(1, parseInt(e.target.value)||1))} />
+                    </div>
+                    {cantidad > 1 && form.codigo && (
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 3 }}>Códigos generados</div>
+                        <div style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--purple)' }}>
+                          {codigoPreview()}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+                          {cantidad} ítems · el número final se incrementa automáticamente
+                        </div>
+                      </div>
+                    )}
+                    {cantidad > 1 && !form.codigo && (
+                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                        Introduce un código con número al final (ej. INF-HW-001)
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Selector en cascada */}
               <div style={{ background: 'var(--bg2)', borderRadius: 'var(--radius)',
                 padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text2)', marginBottom: 2 }}>
+                <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text2)' }}>
                   Ubicación en la taxonomía *
+                  <span style={{ fontWeight: 400, marginLeft: 6, color: 'var(--text3)' }}>
+                    (se recuerda entre ítems)
+                  </span>
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Departamento</label>
-                  <select className="input-field" value={sel.departamento_id} onChange={e => onSelDept(e.target.value)}>
-                    <option value="">— Selecciona departamento —</option>
-                    {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Taller</label>
-                  <select className="input-field" value={sel.taller_id}
-                    onChange={e => onSelTaller(e.target.value)} disabled={!sel.departamento_id}>
-                    <option value="">— Selecciona taller —</option>
-                    {talleresF.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Categoría</label>
-                  <select className="input-field" value={sel.categoria_id}
-                    onChange={e => onSelCategoria(e.target.value)} disabled={!sel.taller_id}>
-                    <option value="">— Selecciona categoría —</option>
-                    {categoriasF.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Subcategoría</label>
-                  <select className="input-field" value={sel.subcategoria_id}
-                    onChange={e => onSelSubcat(e.target.value)} disabled={!sel.categoria_id}>
-                    <option value="">— Selecciona subcategoría —</option>
-                    {subcategoriasF.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
-                  </select>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div className="form-group">
+                    <label className="form-label">Departamento</label>
+                    <select className="input-field" value={sel.departamento_id} onChange={e => onSelDept(e.target.value)}>
+                      <option value="">— Selecciona —</option>
+                      {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Taller</label>
+                    <select className="input-field" value={sel.taller_id}
+                      onChange={e => onSelTaller(e.target.value)} disabled={!sel.departamento_id}>
+                      <option value="">— Selecciona —</option>
+                      {talleresF.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Categoría</label>
+                    <select className="input-field" value={sel.categoria_id}
+                      onChange={e => onSelCategoria(e.target.value)} disabled={!sel.taller_id}>
+                      <option value="">— Selecciona —</option>
+                      {categoriasF.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Subcategoría</label>
+                    <select className="input-field" value={sel.subcategoria_id}
+                      onChange={e => onSelSubcat(e.target.value)} disabled={!sel.categoria_id}>
+                      <option value="">— Selecciona —</option>
+                      {subcategoriasF.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                    </select>
+                  </div>
                 </div>
               </div>
 
-              {/* Más campos */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <Field label="Marca" value={form.marca} onChange={v => setForm(f => ({...f, marca: v}))} />
                 <Field label="Modelo" value={form.modelo} onChange={v => setForm(f => ({...f, modelo: v}))} />
@@ -338,7 +406,7 @@ export default function Inventario() {
             <div className="modal-footer">
               <button className="btn" onClick={() => setModal(null)}>Cancelar</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                {saving ? 'Guardando…' : 'Guardar'}
+                {saving ? 'Guardando…' : cantidad > 1 ? `Crear ${cantidad} ítems` : 'Guardar'}
               </button>
             </div>
           </div>
@@ -348,11 +416,12 @@ export default function Inventario() {
   )
 }
 
-function Field({ label, value, onChange }) {
+function Field({ label, value, onChange, placeholder }) {
   return (
     <div className="form-group">
       <label className="form-label">{label}</label>
-      <input className="input-field" value={value || ''} onChange={e => onChange(e.target.value)} />
+      <input className="input-field" value={value || ''} onChange={e => onChange(e.target.value)}
+        placeholder={placeholder || ''} />
     </div>
   )
 }

@@ -66,6 +66,8 @@ export default function Inventario() {
   const [sel, setSel] = useState(EMPTY_SEL)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [sortKey, setSortKey] = useState(null)
+  const [sortDir, setSortDir] = useState('asc')
 
   async function loadItems() {
     setLoading(true)
@@ -100,7 +102,7 @@ export default function Inventario() {
 
   // ── Exportación ──────────────────────────────────────────
   function exportarExcel() {
-    const rows = buildRows(filtered)
+    const rows = buildRows(sorted)
     const ws = XLSX.utils.json_to_sheet(rows)
     // Ancho de columnas
     ws['!cols'] = [
@@ -115,7 +117,7 @@ export default function Inventario() {
   }
 
   function exportarCSV() {
-    const rows = buildRows(filtered)
+    const rows = buildRows(sorted)
     const headers = Object.keys(rows[0] || {})
     const csv = [
       headers.join(';'),
@@ -253,6 +255,31 @@ export default function Inventario() {
     setFiltroSubcat('')
   }
 
+  function toggleSort(key) {
+    if (sortKey === key) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  function getSortValue(item, key) {
+    switch (key) {
+      case 'codigo':    return item.codigo || ''
+      case 'nombre':    return item.nombre || ''
+      case 'cantidad':  return item.cantidad || 1
+      case 'ubicacion': return item.ubicacion || ''
+      case 'deptTaller': {
+        const dept = item.subcategorias?.categorias?.talleres?.departamentos?.nombre || ''
+        const taller = item.subcategorias?.categorias?.talleres?.nombre || ''
+        return `${dept} ${taller}`
+      }
+      case 'estado': return ESTADO_BADGE[item.estado]?.label || item.estado || ''
+      default: return ''
+    }
+  }
+
   const filtered = items.filter(it => {
     const matchEstado = filtroEstado === 'todos' || it.estado === filtroEstado
     const itDept = it.subcategorias?.categorias?.talleres?.departamentos?.id
@@ -265,6 +292,18 @@ export default function Inventario() {
       it.codigo.toLowerCase().includes(q) || (it.ubicacion||'').toLowerCase().includes(q)
     return matchEstado && matchDept && matchCat && matchSubcat && matchQ
   })
+
+  const sorted = sortKey ? [...filtered].sort((a, b) => {
+    const va = getSortValue(a, sortKey)
+    const vb = getSortValue(b, sortKey)
+    let cmp
+    if (typeof va === 'number' && typeof vb === 'number') {
+      cmp = va - vb
+    } else {
+      cmp = String(va).localeCompare(String(vb), 'es', { sensitivity: 'base', numeric: true })
+    }
+    return sortDir === 'asc' ? cmp : -cmp
+  }) : filtered
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
@@ -365,18 +404,22 @@ export default function Inventario() {
           <div className="card">
             <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text3)',
               borderBottom: '0.5px solid var(--border)', background: 'var(--bg2)' }}>
-              {filtered.length} ítem{filtered.length !== 1 ? 's' : ''}
+              {sorted.length} ítem{sorted.length !== 1 ? 's' : ''}
             </div>
             <table>
               <thead>
                 <tr>
-                  <th>Código</th><th>Nombre</th><th>Cant.</th><th>Ubicación</th>
-                  <th>Dept / Taller</th><th>Estado</th>
+                  <SortTH label="Código" col="codigo" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                  <SortTH label="Nombre" col="nombre" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                  <SortTH label="Cant." col="cantidad" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
+                  <SortTH label="Ubicación" col="ubicacion" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                  <SortTH label="Dept / Taller" col="deptTaller" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                  <SortTH label="Estado" col="estado" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
                   {canEdit && <th style={{ width: 80 }}></th>}
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(item => {
+                {sorted.map(item => {
                   const b = ESTADO_BADGE[item.estado] || ESTADO_BADGE.disponible
                   const dept = item.subcategorias?.categorias?.talleres?.departamentos?.nombre
                   const taller = item.subcategorias?.categorias?.talleres?.nombre
@@ -527,5 +570,22 @@ function Field({ label, value, onChange }) {
       <label className="form-label">{label}</label>
       <input className="input-field" value={value || ''} onChange={e => onChange(e.target.value)} />
     </div>
+  )
+}
+
+function SortTH({ label, col, sortKey, sortDir, onClick, align }) {
+  const active = sortKey === col
+  return (
+    <th onClick={() => onClick(col)} style={{
+      cursor: 'pointer', userSelect: 'none',
+      textAlign: align || 'left',
+      color: active ? 'var(--text)' : undefined
+    }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        {label}
+        <i className={`ti ti-arrow-${active && sortDir === 'desc' ? 'down' : 'up'}`}
+          style={{ fontSize: 12, opacity: active ? 1 : 0.25 }} aria-hidden="true" />
+      </span>
+    </th>
   )
 }

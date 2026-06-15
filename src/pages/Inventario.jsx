@@ -45,6 +45,8 @@ export default function Inventario() {
   const [loading, setLoading] = useState(true)
   const [filtroEstado, setFiltroEstado] = useState('todos')
   const [filtroDept, setFiltroDept] = useState('')
+  const [filtroCat, setFiltroCat] = useState('')
+  const [filtroSubcat, setFiltroSubcat] = useState('')
   const [busqueda, setBusqueda] = useState('')
   const [exportMenu, setExportMenu] = useState(false)
 
@@ -69,8 +71,8 @@ export default function Inventario() {
     setLoading(true)
     const { data } = await supabase.from('items').select(`
       *,
-      subcategorias(nombre,
-        categorias(nombre,
+      subcategorias(nombre, categoria_id,
+        categorias(id, nombre,
           talleres(nombre,
             departamentos(id, nombre)
           )
@@ -233,13 +235,35 @@ export default function Inventario() {
     loadItems()
   }
 
+  // Opciones de filtro en cascada (categoría depende de dept, subcategoría depende de categoría)
+  const categoriasFiltro = filtroDept
+    ? categorias.filter(c => talleres.find(t => t.id === c.taller_id)?.departamento_id === filtroDept)
+    : categorias
+  const subcategoriasFiltro = filtroCat
+    ? subcategorias.filter(s => s.categoria_id === filtroCat)
+    : (filtroDept ? subcategorias.filter(s => categoriasFiltro.some(c => c.id === s.categoria_id)) : subcategorias)
+
+  function onFiltroDept(id) {
+    setFiltroDept(id)
+    setFiltroCat('')
+    setFiltroSubcat('')
+  }
+  function onFiltroCat(id) {
+    setFiltroCat(id)
+    setFiltroSubcat('')
+  }
+
   const filtered = items.filter(it => {
     const matchEstado = filtroEstado === 'todos' || it.estado === filtroEstado
-    const matchDept = !filtroDept || it.subcategorias?.categorias?.talleres?.departamentos?.id === filtroDept
+    const itDept = it.subcategorias?.categorias?.talleres?.departamentos?.id
+    const itCat = it.subcategorias?.categoria_id
+    const matchDept = !filtroDept || itDept === filtroDept
+    const matchCat = !filtroCat || itCat === filtroCat
+    const matchSubcat = !filtroSubcat || it.subcategoria_id === filtroSubcat
     const q = busqueda.toLowerCase()
     const matchQ = !q || it.nombre.toLowerCase().includes(q) ||
       it.codigo.toLowerCase().includes(q) || (it.ubicacion||'').toLowerCase().includes(q)
-    return matchEstado && matchDept && matchQ
+    return matchEstado && matchDept && matchCat && matchSubcat && matchQ
   })
 
   return (
@@ -300,15 +324,32 @@ export default function Inventario() {
           value={busqueda} onChange={e => setBusqueda(e.target.value)}
           style={{ flex: 1, minWidth: 180 }} />
         <select className="input-field" value={filtroDept}
-          onChange={e => setFiltroDept(e.target.value)} style={{ width: 180 }}>
+          onChange={e => onFiltroDept(e.target.value)} style={{ width: 170 }}>
           <option value="">Todos los departamentos</option>
           {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+        </select>
+        <select className="input-field" value={filtroCat}
+          onChange={e => onFiltroCat(e.target.value)} style={{ width: 160 }}>
+          <option value="">Todas las categorías</option>
+          {categoriasFiltro.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+        <select className="input-field" value={filtroSubcat}
+          onChange={e => setFiltroSubcat(e.target.value)} style={{ width: 170 }}>
+          <option value="">Todas las subcategorías</option>
+          {subcategoriasFiltro.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
         </select>
         <select className="input-field" value={filtroEstado}
           onChange={e => setFiltroEstado(e.target.value)} style={{ width: 150 }}>
           <option value="todos">Todos los estados</option>
           {ESTADOS.map(e => <option key={e} value={e}>{ESTADO_BADGE[e].label}</option>)}
         </select>
+        {(filtroDept || filtroCat || filtroSubcat || filtroEstado !== 'todos' || busqueda) && (
+          <button className="btn" style={{ fontSize: 12 }} onClick={() => {
+            setFiltroDept(''); setFiltroCat(''); setFiltroSubcat(''); setFiltroEstado('todos'); setBusqueda('')
+          }}>
+            <i className="ti ti-x" aria-hidden="true" />Limpiar filtros
+          </button>
+        )}
       </div>
 
       {/* Tabla */}

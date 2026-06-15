@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
+const ESTADOS = ['disponible','prestamo','averia','baja','mantenimiento']
 const ESTADO_BADGE = {
   disponible:    { cls: 'badge-green',  label: 'Disponible'    },
   prestamo:      { cls: 'badge-amber',  label: 'Préstamo'      },
@@ -15,22 +16,83 @@ export default function Buscar() {
   const [searched, setSearched] = useState(false)
   const [loading, setLoading] = useState(false)
 
+  // Filtros
+  const [departamentos, setDepartamentos] = useState([])
+  const [talleres, setTalleres] = useState([])
+  const [categorias, setCategorias] = useState([])
+  const [subcategorias, setSubcategorias] = useState([])
+  const [filtroDept, setFiltroDept] = useState('')
+  const [filtroCat, setFiltroCat] = useState('')
+  const [filtroSubcat, setFiltroSubcat] = useState('')
+  const [filtroEstado, setFiltroEstado] = useState('')
+
+  useEffect(() => {
+    async function load() {
+      const [d, t, c, s] = await Promise.all([
+        supabase.from('departamentos').select('id, nombre').eq('activo', true).order('nombre'),
+        supabase.from('talleres').select('id, nombre, departamento_id').eq('activo', true).order('nombre'),
+        supabase.from('categorias').select('id, nombre, taller_id').eq('activo', true).order('nombre'),
+        supabase.from('subcategorias').select('id, nombre, categoria_id').eq('activo', true).order('nombre'),
+      ])
+      setDepartamentos(d.data || [])
+      setTalleres(t.data || [])
+      setCategorias(c.data || [])
+      setSubcategorias(s.data || [])
+    }
+    load()
+  }, [])
+
+  const categoriasFiltro = filtroDept
+    ? categorias.filter(c => talleres.find(t => t.id === c.taller_id)?.departamento_id === filtroDept)
+    : categorias
+  const subcategoriasFiltro = filtroCat
+    ? subcategorias.filter(s => s.categoria_id === filtroCat)
+    : (filtroDept ? subcategorias.filter(s => categoriasFiltro.some(c => c.id === s.categoria_id)) : subcategorias)
+
+  function onFiltroDept(id) { setFiltroDept(id); setFiltroCat(''); setFiltroSubcat('') }
+  function onFiltroCat(id) { setFiltroCat(id); setFiltroSubcat('') }
+
+  const hayFiltros = filtroDept || filtroCat || filtroSubcat || filtroEstado
+
+  function limpiarFiltros() {
+    setFiltroDept(''); setFiltroCat(''); setFiltroSubcat(''); setFiltroEstado('')
+  }
+
   async function handleSearch(e) {
     e.preventDefault()
-    if (!q.trim()) return
+    if (!q.trim() && !hayFiltros) return
     setLoading(true)
-    const { data } = await supabase.from('items').select(`
-      id, codigo, nombre, estado, ubicacion, marca, modelo,
-      subcategorias(nombre,
-        categorias(nombre,
-          talleres(nombre,
-            departamentos(nombre)
+
+    let query = supabase.from('items').select(`
+      id, codigo, nombre, estado, ubicacion, marca, modelo, cantidad,
+      subcategoria_id,
+      subcategorias(nombre, categoria_id,
+        categorias(id, nombre, taller_id,
+          talleres(nombre, departamento_id,
+            departamentos(id, nombre)
           )
         )
       )
-    `).or(`nombre.ilike.%${q}%,codigo.ilike.%${q}%,ubicacion.ilike.%${q}%,marca.ilike.%${q}%,modelo.ilike.%${q}%`)
-      .limit(50)
-    setResults(data || [])
+    `).limit(100)
+
+    if (q.trim()) {
+      query = query.or(`nombre.ilike.%${q}%,codigo.ilike.%${q}%,ubicacion.ilike.%${q}%,marca.ilike.%${q}%,modelo.ilike.%${q}%,notas.ilike.%${q}%`)
+    }
+    if (filtroEstado) query = query.eq('estado', filtroEstado)
+    if (filtroSubcat) query = query.eq('subcategoria_id', filtroSubcat)
+
+    const { data } = await query
+
+    // Filtros de categoría / departamento se aplican en cliente (relaciones anidadas)
+    let filteredData = data || []
+    if (filtroCat) {
+      filteredData = filteredData.filter(it => it.subcategorias?.categoria_id === filtroCat)
+    }
+    if (filtroDept) {
+      filteredData = filteredData.filter(it => it.subcategorias?.categorias?.talleres?.departamentos?.id === filtroDept)
+    }
+
+    setResults(filteredData)
     setSearched(true)
     setLoading(false)
   }
@@ -42,40 +104,71 @@ export default function Buscar() {
         <h1 style={{ fontSize: 16, fontWeight: 500 }}>Buscar</h1>
       </div>
 
-      <div style={{ padding: 24, flex: 1, display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <form onSubmit={handleSearch} style={{ display: 'flex', gap: 8 }}>
-          <input className="input-field" placeholder="Nombre, código, ubicación, marca, modelo…"
-            value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1 }} autoFocus />
-          <button className="btn btn-primary" type="submit" disabled={loading}>
-            <i className="ti ti-search" aria-hidden="true" />
-            {loading ? 'Buscando…' : 'Buscar'}
-          </button>
+      <div style={{ padding: 24, flex: 1, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <form onSubmit={handleSearch} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input className="input-field" placeholder="Nombre, código, ubicación, marca, modelo, notas…"
+              value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1 }} autoFocus />
+            <button className="btn btn-primary" type="submit" disabled={loading}>
+              <i className="ti ti-search" aria-hidden="true" />
+              {loading ? 'Buscando…' : 'Buscar'}
+            </button>
+          </div>
+
+          {/* Filtros */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <select className="input-field" value={filtroDept}
+              onChange={e => onFiltroDept(e.target.value)} style={{ width: 170 }}>
+              <option value="">Todos los departamentos</option>
+              {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+            </select>
+            <select className="input-field" value={filtroCat}
+              onChange={e => onFiltroCat(e.target.value)} style={{ width: 160 }}>
+              <option value="">Todas las categorías</option>
+              {categoriasFiltro.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </select>
+            <select className="input-field" value={filtroSubcat}
+              onChange={e => setFiltroSubcat(e.target.value)} style={{ width: 170 }}>
+              <option value="">Todas las subcategorías</option>
+              {subcategoriasFiltro.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+            </select>
+            <select className="input-field" value={filtroEstado}
+              onChange={e => setFiltroEstado(e.target.value)} style={{ width: 150 }}>
+              <option value="">Todos los estados</option>
+              {ESTADOS.map(e => <option key={e} value={e}>{ESTADO_BADGE[e].label}</option>)}
+            </select>
+            {hayFiltros && (
+              <button type="button" className="btn" style={{ fontSize: 12 }} onClick={limpiarFiltros}>
+                <i className="ti ti-x" aria-hidden="true" />Limpiar filtros
+              </button>
+            )}
+          </div>
         </form>
 
         {!searched && (
           <div className="empty-state">
             <i className="ti ti-search" style={{ fontSize: 32, display: 'block', marginBottom: 8 }} aria-hidden="true" />
-            Introduce un término para buscar en todo el inventario
+            Introduce un término y/o aplica filtros para buscar en el inventario
           </div>
         )}
 
         {searched && results.length === 0 && (
           <div className="empty-state">
             <i className="ti ti-mood-empty" style={{ fontSize: 32, display: 'block', marginBottom: 8 }} aria-hidden="true" />
-            Sin resultados para "{q}"
+            Sin resultados
           </div>
         )}
 
         {results.length > 0 && (
           <>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-              {results.length} resultado{results.length !== 1 ? 's' : ''} para "{q}"
+              {results.length} resultado{results.length !== 1 ? 's' : ''}
             </div>
-            <div className="card">
+            <div className="card" style={{ overflow: 'auto' }}>
               <table>
                 <thead>
                   <tr>
-                    <th>Código</th><th>Nombre</th><th>Marca / Modelo</th>
+                    <th>Código</th><th>Nombre</th><th>Cant.</th><th>Marca / Modelo</th>
                     <th>Ubicación</th><th>Ruta</th><th>Estado</th>
                   </tr>
                 </thead>
@@ -93,6 +186,9 @@ export default function Buscar() {
                       <tr key={item.id}>
                         <td style={{ color: 'var(--text3)', fontFamily: 'monospace', fontSize: 12 }}>{item.codigo}</td>
                         <td style={{ fontWeight: 500 }}>{item.nombre}</td>
+                        <td style={{ textAlign: 'center', color: item.cantidad > 1 ? 'var(--text)' : 'var(--text3)' }}>
+                          {item.cantidad || 1}
+                        </td>
                         <td style={{ color: 'var(--text2)', fontSize: 12 }}>
                           {[item.marca, item.modelo].filter(Boolean).join(' ') || '—'}
                         </td>

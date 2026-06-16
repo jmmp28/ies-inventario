@@ -22,6 +22,7 @@ export default function Buscar() {
   const [categorias, setCategorias] = useState([])
   const [subcategorias, setSubcategorias] = useState([])
   const [filtroDept, setFiltroDept] = useState('')
+  const [filtroTaller, setFiltroTaller] = useState('')
   const [filtroCat, setFiltroCat] = useState('')
   const [filtroSubcat, setFiltroSubcat] = useState('')
   const [filtroEstado, setFiltroEstado] = useState('')
@@ -44,20 +45,24 @@ export default function Buscar() {
     load()
   }, [])
 
-  const categoriasFiltro = filtroDept
-    ? categorias.filter(c => talleres.find(t => t.id === c.taller_id)?.departamento_id === filtroDept)
-    : categorias
+  const talleresFiltro = filtroDept
+    ? talleres.filter(t => t.departamento_id === filtroDept)
+    : talleres
+  const categoriasFiltro = filtroTaller
+    ? categorias.filter(c => c.taller_id === filtroTaller)
+    : (filtroDept ? categorias.filter(c => talleresFiltro.some(t => t.id === c.taller_id)) : categorias)
   const subcategoriasFiltro = filtroCat
     ? subcategorias.filter(s => s.categoria_id === filtroCat)
-    : (filtroDept ? subcategorias.filter(s => categoriasFiltro.some(c => c.id === s.categoria_id)) : subcategorias)
+    : (filtroTaller ? subcategorias.filter(s => categoriasFiltro.some(c => c.id === s.categoria_id)) : subcategorias)
 
-  function onFiltroDept(id) { setFiltroDept(id); setFiltroCat(''); setFiltroSubcat('') }
+  function onFiltroDept(id) { setFiltroDept(id); setFiltroTaller(''); setFiltroCat(''); setFiltroSubcat('') }
+  function onFiltroTaller(id) { setFiltroTaller(id); setFiltroCat(''); setFiltroSubcat('') }
   function onFiltroCat(id) { setFiltroCat(id); setFiltroSubcat('') }
 
-  const hayFiltros = filtroDept || filtroCat || filtroSubcat || filtroEstado
+  const hayFiltros = filtroDept || filtroTaller || filtroCat || filtroSubcat || filtroEstado
 
   function limpiarFiltros() {
-    setFiltroDept(''); setFiltroCat(''); setFiltroSubcat(''); setFiltroEstado('')
+    setFiltroDept(''); setFiltroTaller(''); setFiltroCat(''); setFiltroSubcat(''); setFiltroEstado('')
   }
 
   async function handleSearch(e) {
@@ -85,14 +90,11 @@ export default function Buscar() {
 
     const { data } = await query
 
-    // Filtros de categoría / departamento se aplican en cliente (relaciones anidadas)
+    // Filtros de categoría / departamento / taller se aplican en cliente (relaciones anidadas)
     let filteredData = data || []
-    if (filtroCat) {
-      filteredData = filteredData.filter(it => it.subcategorias?.categoria_id === filtroCat)
-    }
-    if (filtroDept) {
-      filteredData = filteredData.filter(it => it.subcategorias?.categorias?.talleres?.departamentos?.id === filtroDept)
-    }
+    if (filtroCat) filteredData = filteredData.filter(it => it.subcategorias?.categoria_id === filtroCat)
+    if (filtroTaller) filteredData = filteredData.filter(it => it.subcategorias?.categorias?.taller_id === filtroTaller)
+    if (filtroDept) filteredData = filteredData.filter(it => it.subcategorias?.categorias?.talleres?.departamentos?.id === filtroDept)
 
     setResults(filteredData)
     setSearched(true)
@@ -158,22 +160,27 @@ export default function Buscar() {
           {/* Filtros */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <select className="input-field" value={filtroDept}
-              onChange={e => onFiltroDept(e.target.value)} style={{ width: 170 }}>
+              onChange={e => onFiltroDept(e.target.value)} style={{ width: 160 }}>
               <option value="">Todos los departamentos</option>
               {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
             </select>
+            <select className="input-field" value={filtroTaller}
+              onChange={e => onFiltroTaller(e.target.value)} style={{ width: 150 }}>
+              <option value="">Todos los talleres</option>
+              {talleresFiltro.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+            </select>
             <select className="input-field" value={filtroCat}
-              onChange={e => onFiltroCat(e.target.value)} style={{ width: 160 }}>
+              onChange={e => onFiltroCat(e.target.value)} style={{ width: 150 }}>
               <option value="">Todas las categorías</option>
               {categoriasFiltro.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
             </select>
             <select className="input-field" value={filtroSubcat}
-              onChange={e => setFiltroSubcat(e.target.value)} style={{ width: 170 }}>
+              onChange={e => setFiltroSubcat(e.target.value)} style={{ width: 160 }}>
               <option value="">Todas las subcategorías</option>
               {subcategoriasFiltro.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
             </select>
             <select className="input-field" value={filtroEstado}
-              onChange={e => setFiltroEstado(e.target.value)} style={{ width: 150 }}>
+              onChange={e => setFiltroEstado(e.target.value)} style={{ width: 140 }}>
               <option value="">Todos los estados</option>
               {ESTADOS.map(e => <option key={e} value={e}>{ESTADO_BADGE[e].label}</option>)}
             </select>

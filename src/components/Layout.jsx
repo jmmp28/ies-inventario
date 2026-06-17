@@ -79,6 +79,7 @@ export default function Layout() {
             <NavSection label="Administración" />
             <NavItem to="/estructura" icon="ti-sitemap" label="Estructura" onClick={closMenu} />
             <NavItem to="/usuarios" icon="ti-users" label="Usuarios" onClick={closMenu} />
+              <NavItem to="/ajustes" icon="ti-settings" label="Ajustes" onClick={closMenu} />
           </>
         )}
       </nav>

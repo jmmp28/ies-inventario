@@ -7,10 +7,13 @@ import Inventario from './pages/Inventario'
 import Buscar from './pages/Buscar'
 import Estructura from './pages/Estructura'
 import Usuarios from './pages/Usuarios'
+import Ajustes from './pages/Ajustes'
 
 function PrivateRoute({ children, roles }) {
   const { session, perfil } = useAuth()
   if (!session) return <Navigate to="/login" replace />
+  // Si hay roles requeridos, esperar a que perfil cargue antes de decidir
+  if (roles && !perfil) return null
   if (roles && perfil && !roles.includes(perfil.rol)) return <Navigate to="/" replace />
   return children
 }
@@ -29,6 +32,9 @@ export default function App() {
         } />
         <Route path="usuarios" element={
           <PrivateRoute roles={['superadmin']}><Usuarios /></PrivateRoute>
+        } />
+        <Route path="ajustes" element={
+          <PrivateRoute roles={['superadmin']}><Ajustes /></PrivateRoute>
         } />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

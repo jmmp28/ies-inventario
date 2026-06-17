@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 
-const ESTADOS = ['disponible','prestamo','averia','baja','mantenimiento']
 const ESTADO_BADGE = {
   disponible:    { cls: 'badge-green',  label: 'Disponible'    },
   prestamo:      { cls: 'badge-amber',  label: 'Préstamo'      },
@@ -13,266 +12,196 @@ const ESTADO_BADGE = {
 export default function Buscar() {
   const [q, setQ] = useState('')
   const [results, setResults] = useState([])
-  const [searched, setSearched] = useState(false)
+  const [selected, setSelected] = useState(null)
   const [loading, setLoading] = useState(false)
-
-  // Filtros
-  const [departamentos, setDepartamentos] = useState([])
-  const [talleres, setTalleres] = useState([])
-  const [categorias, setCategorias] = useState([])
-  const [subcategorias, setSubcategorias] = useState([])
-  const [filtroDept, setFiltroDept] = useState('')
-  const [filtroTaller, setFiltroTaller] = useState('')
-  const [filtroCat, setFiltroCat] = useState('')
-  const [filtroSubcat, setFiltroSubcat] = useState('')
-  const [filtroEstado, setFiltroEstado] = useState('')
-  const [sortKey, setSortKey] = useState(null)
-  const [sortDir, setSortDir] = useState('asc')
-
-  useEffect(() => {
-    async function load() {
-      const [d, t, c, s] = await Promise.all([
-        supabase.from('departamentos').select('id, nombre').eq('activo', true).order('nombre'),
-        supabase.from('talleres').select('id, nombre, departamento_id').eq('activo', true).order('nombre'),
-        supabase.from('categorias').select('id, nombre, taller_id').eq('activo', true).order('nombre'),
-        supabase.from('subcategorias').select('id, nombre, categoria_id').eq('activo', true).order('nombre'),
-      ])
-      setDepartamentos(d.data || [])
-      setTalleres(t.data || [])
-      setCategorias(c.data || [])
-      setSubcategorias(s.data || [])
-    }
-    load()
-  }, [])
-
-  const talleresFiltro = filtroDept
-    ? talleres.filter(t => t.departamento_id === filtroDept)
-    : talleres
-  const categoriasFiltro = filtroTaller
-    ? categorias.filter(c => c.taller_id === filtroTaller)
-    : (filtroDept ? categorias.filter(c => talleresFiltro.some(t => t.id === c.taller_id)) : categorias)
-  const subcategoriasFiltro = filtroCat
-    ? subcategorias.filter(s => s.categoria_id === filtroCat)
-    : (filtroTaller ? subcategorias.filter(s => categoriasFiltro.some(c => c.id === s.categoria_id)) : subcategorias)
-
-  function onFiltroDept(id) { setFiltroDept(id); setFiltroTaller(''); setFiltroCat(''); setFiltroSubcat('') }
-  function onFiltroTaller(id) { setFiltroTaller(id); setFiltroCat(''); setFiltroSubcat('') }
-  function onFiltroCat(id) { setFiltroCat(id); setFiltroSubcat('') }
-
-  const hayFiltros = filtroDept || filtroTaller || filtroCat || filtroSubcat || filtroEstado
-
-  function limpiarFiltros() {
-    setFiltroDept(''); setFiltroTaller(''); setFiltroCat(''); setFiltroSubcat(''); setFiltroEstado('')
-  }
 
   async function handleSearch(e) {
     e.preventDefault()
-    if (!q.trim() && !hayFiltros) return
+    if (!q.trim()) return
     setLoading(true)
-
-    let query = supabase.from('items').select(`
-      id, codigo, nombre, estado, ubicacion, marca, modelo, cantidad,
-      subcategoria_id,
+    setSelected(null)
+    const { data } = await supabase.from('items').select(`
+      *,
       subcategorias(nombre, categoria_id,
         categorias(id, nombre, taller_id,
-          talleres(nombre, departamento_id,
+          talleres(id, nombre,
             departamentos(id, nombre)
           )
         )
       )
-    `).limit(100)
-
-    if (q.trim()) {
-      query = query.or(`nombre.ilike.%${q}%,codigo.ilike.%${q}%,ubicacion.ilike.%${q}%,marca.ilike.%${q}%,modelo.ilike.%${q}%,notas.ilike.%${q}%`)
-    }
-    if (filtroEstado) query = query.eq('estado', filtroEstado)
-    if (filtroSubcat) query = query.eq('subcategoria_id', filtroSubcat)
-
-    const { data } = await query
-
-    // Filtros de categoría / departamento / taller se aplican en cliente (relaciones anidadas)
-    let filteredData = data || []
-    if (filtroCat) filteredData = filteredData.filter(it => it.subcategorias?.categoria_id === filtroCat)
-    if (filtroTaller) filteredData = filteredData.filter(it => it.subcategorias?.categorias?.taller_id === filtroTaller)
-    if (filtroDept) filteredData = filteredData.filter(it => it.subcategorias?.categorias?.talleres?.departamentos?.id === filtroDept)
-
-    setResults(filteredData)
-    setSearched(true)
+    `)
+    .or(`nombre.ilike.%${q}%,codigo.ilike.%${q}%,marca.ilike.%${q}%,modelo.ilike.%${q}%,numero_serie.ilike.%${q}%,ubicacion.ilike.%${q}%,notas.ilike.%${q}%`)
+    .limit(20)
+    setResults(data || [])
     setLoading(false)
-    setSortKey(null)
+    if (data?.length === 1) setSelected(data[0])
   }
 
-  function toggleSort(key) {
-    if (sortKey === key) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortKey(key)
-      setSortDir('asc')
-    }
+  function handleInput(e) {
+    setQ(e.target.value)
+    if (!e.target.value.trim()) { setResults([]); setSelected(null) }
   }
 
-  function getSortValue(item, key) {
-    switch (key) {
-      case 'codigo':   return item.codigo || ''
-      case 'nombre':   return item.nombre || ''
-      case 'cantidad': return item.cantidad || 1
-      case 'marcaModelo': return [item.marca, item.modelo].filter(Boolean).join(' ')
-      case 'ubicacion': return item.ubicacion || ''
-      case 'ruta': {
-        const s = item.subcategorias
-        return s ? [s.categorias?.talleres?.departamentos?.nombre, s.categorias?.talleres?.nombre, s.categorias?.nombre, s.nombre].filter(Boolean).join(' › ') : ''
-      }
-      case 'estado': return ESTADO_BADGE[item.estado]?.label || item.estado || ''
-      default: return ''
-    }
-  }
-
-  const sortedResults = sortKey ? [...results].sort((a, b) => {
-    const va = getSortValue(a, sortKey)
-    const vb = getSortValue(b, sortKey)
-    let cmp
-    if (typeof va === 'number' && typeof vb === 'number') {
-      cmp = va - vb
-    } else {
-      cmp = String(va).localeCompare(String(vb), 'es', { sensitivity: 'base', numeric: true })
-    }
-    return sortDir === 'asc' ? cmp : -cmp
-  }) : results
+  const b = selected ? (ESTADO_BADGE[selected.estado] || ESTADO_BADGE.disponible) : null
+  const s = selected?.subcategorias
+  const ruta = s ? [
+    s.categorias?.talleres?.departamentos?.nombre,
+    s.categorias?.talleres?.nombre,
+    s.categorias?.nombre,
+    s.nombre
+  ].filter(Boolean) : []
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '16px 24px', borderBottom: '0.5px solid var(--border)',
-        background: 'var(--bg)' }}>
-        <h1 style={{ fontSize: 16, fontWeight: 500 }}>Buscar</h1>
+      <div style={{ padding: '16px 24px', borderBottom: '0.5px solid var(--border)', background: 'var(--bg)' }}>
+        <h1 style={{ fontSize: 16, fontWeight: 500 }}>Buscar ítem</h1>
       </div>
 
-      <div style={{ padding: 24, flex: 1, display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <form onSubmit={handleSearch} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input className="input-field" placeholder="Nombre, código, ubicación, marca, modelo, notas…"
-              value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1 }} autoFocus />
-            <button className="btn btn-primary" type="submit" disabled={loading}>
-              <i className="ti ti-search" aria-hidden="true" />
-              {loading ? 'Buscando…' : 'Buscar'}
-            </button>
-          </div>
-
-          {/* Filtros */}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <select className="input-field" value={filtroDept}
-              onChange={e => onFiltroDept(e.target.value)} style={{ width: 160 }}>
-              <option value="">Todos los departamentos</option>
-              {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
-            </select>
-            <select className="input-field" value={filtroTaller}
-              onChange={e => onFiltroTaller(e.target.value)} style={{ width: 150 }}>
-              <option value="">Todos los talleres</option>
-              {talleresFiltro.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
-            </select>
-            <select className="input-field" value={filtroCat}
-              onChange={e => onFiltroCat(e.target.value)} style={{ width: 150 }}>
-              <option value="">Todas las categorías</option>
-              {categoriasFiltro.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-            </select>
-            <select className="input-field" value={filtroSubcat}
-              onChange={e => setFiltroSubcat(e.target.value)} style={{ width: 160 }}>
-              <option value="">Todas las subcategorías</option>
-              {subcategoriasFiltro.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
-            </select>
-            <select className="input-field" value={filtroEstado}
-              onChange={e => setFiltroEstado(e.target.value)} style={{ width: 140 }}>
-              <option value="">Todos los estados</option>
-              {ESTADOS.map(e => <option key={e} value={e}>{ESTADO_BADGE[e].label}</option>)}
-            </select>
-            {hayFiltros && (
-              <button type="button" className="btn" style={{ fontSize: 12 }} onClick={limpiarFiltros}>
-                <i className="ti ti-x" aria-hidden="true" />Limpiar filtros
-              </button>
-            )}
-          </div>
+      <div style={{ padding: 24, flex: 1, display: 'flex', flexDirection: 'column', gap: 20, overflow: 'auto' }}>
+        <form onSubmit={handleSearch} style={{ display: 'flex', gap: 8 }}>
+          <input className="input-field" placeholder="Nombre, código, marca, modelo, núm. serie…"
+            value={q} onChange={handleInput} style={{ flex: 1 }} autoFocus />
+          <button className="btn btn-primary" type="submit" disabled={loading}>
+            <i className="ti ti-search" aria-hidden="true" />
+            {loading ? 'Buscando…' : 'Buscar'}
+          </button>
         </form>
 
-        {!searched && (
-          <div className="empty-state">
-            <i className="ti ti-search" style={{ fontSize: 32, display: 'block', marginBottom: 8 }} aria-hidden="true" />
-            Introduce un término y/o aplica filtros para buscar en el inventario
+        {/* Lista de resultados cuando hay más de 1 */}
+        {results.length > 1 && !selected && (
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+              {results.length} resultado{results.length !== 1 ? 's' : ''} — selecciona uno para ver el detalle
+            </div>
+            <div className="card">
+              {results.map((item, i) => {
+                const b = ESTADO_BADGE[item.estado] || ESTADO_BADGE.disponible
+                const dept = item.subcategorias?.categorias?.talleres?.departamentos?.nombre
+                return (
+                  <div key={item.id} onClick={() => setSelected(item)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      padding: '10px 14px', cursor: 'pointer',
+                      borderBottom: i < results.length - 1 ? '0.5px solid var(--border)' : 'none'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg2)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{item.nombre}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+                        {item.codigo} · {dept || '—'}
+                      </div>
+                    </div>
+                    <span className={`badge ${b.cls}`}>{b.label}</span>
+                    <i className="ti ti-chevron-right" style={{ fontSize: 14, color: 'var(--text3)' }} aria-hidden="true" />
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
 
-        {searched && results.length === 0 && (
+        {/* Sin resultados */}
+        {results.length === 0 && q && !loading && (
           <div className="empty-state">
             <i className="ti ti-mood-empty" style={{ fontSize: 32, display: 'block', marginBottom: 8 }} aria-hidden="true" />
-            Sin resultados
+            Sin resultados para "{q}"
           </div>
         )}
 
-        {results.length > 0 && (
-          <>
-            <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-              {sortedResults.length} resultado{sortedResults.length !== 1 ? 's' : ''}
+        {/* Estado inicial */}
+        {!q && (
+          <div className="empty-state">
+            <i className="ti ti-search" style={{ fontSize: 32, display: 'block', marginBottom: 8 }} aria-hidden="true" />
+            Busca por nombre, código, marca, modelo o número de serie
+          </div>
+        )}
+
+        {/* Ficha de detalle */}
+        {selected && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {results.length > 1 && (
+              <button className="btn" style={{ alignSelf: 'flex-start', fontSize: 12 }}
+                onClick={() => setSelected(null)}>
+                <i className="ti ti-arrow-left" aria-hidden="true" />Volver a resultados
+              </button>
+            )}
+
+            {/* Cabecera de la ficha */}
+            <div className="card" style={{ padding: '20px 24px' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
+                <div>
+                  <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 4 }}>{selected.nombre}</h2>
+                  <div style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text3)' }}>{selected.codigo}</div>
+                </div>
+                <span className={`badge ${b.cls}`} style={{ fontSize: 13, padding: '4px 12px', flexShrink: 0 }}>
+                  {b.label}
+                </span>
+              </div>
+
+              {/* Ruta taxonómica */}
+              {ruta.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+                  padding: '8px 12px', background: 'var(--bg2)', borderRadius: 'var(--radius)',
+                  marginBottom: 16 }}>
+                  {ruta.map((r, i) => (
+                    <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 12, color: i === ruta.length - 1 ? 'var(--text)' : 'var(--text3)' }}>{r}</span>
+                      {i < ruta.length - 1 && <i className="ti ti-chevron-right" style={{ fontSize: 11, color: 'var(--text3)' }} aria-hidden="true" />}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Campos en grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
+                <DetalleField label="Cantidad" value={selected.cantidad || 1} />
+                <DetalleField label="Ubicación" value={selected.ubicacion} />
+                <DetalleField label="Marca" value={selected.marca} />
+                <DetalleField label="Modelo" value={selected.modelo} />
+                <DetalleField label="Núm. serie" value={selected.numero_serie} />
+                <DetalleField label="Fecha adquisición" value={
+                  selected.fecha_adquisicion
+                    ? new Date(selected.fecha_adquisicion).toLocaleDateString('es-ES')
+                    : null
+                } />
+                <DetalleField label="Valor (€)" value={
+                  selected.valor_euros ? `${parseFloat(selected.valor_euros).toLocaleString('es-ES')} €` : null
+                } />
+                <DetalleField label="Última actualización" value={
+                  new Date(selected.updated_at).toLocaleDateString('es-ES', { day:'2-digit', month:'2-digit', year:'numeric' })
+                } />
+              </div>
+
+              {selected.descripcion && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text2)', fontWeight: 500, marginBottom: 4 }}>Descripción</div>
+                  <div style={{ fontSize: 13, color: 'var(--text)' }}>{selected.descripcion}</div>
+                </div>
+              )}
+
+              {selected.notas && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text2)', fontWeight: 500, marginBottom: 4 }}>Notas</div>
+                  <div style={{ fontSize: 13, color: 'var(--text)', background: 'var(--bg2)',
+                    padding: '8px 12px', borderRadius: 'var(--radius)' }}>{selected.notas}</div>
+                </div>
+              )}
             </div>
-            <div className="card" style={{ overflow: 'auto' }}>
-              <table>
-                <thead>
-                  <tr>
-                    <SortTH label="Código" col="codigo" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                    <SortTH label="Nombre" col="nombre" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                    <SortTH label="Cant." col="cantidad" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
-                    <SortTH label="Marca / Modelo" col="marcaModelo" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                    <SortTH label="Ubicación" col="ubicacion" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                    <SortTH label="Ruta" col="ruta" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                    <SortTH label="Estado" col="estado" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedResults.map(item => {
-                    const b = ESTADO_BADGE[item.estado] || ESTADO_BADGE.disponible
-                    const s = item.subcategorias
-                    const ruta = s ? [
-                      s.categorias?.talleres?.departamentos?.nombre,
-                      s.categorias?.talleres?.nombre,
-                      s.categorias?.nombre,
-                      s.nombre
-                    ].filter(Boolean).join(' › ') : '—'
-                    return (
-                      <tr key={item.id}>
-                        <td style={{ color: 'var(--text3)', fontFamily: 'monospace', fontSize: 12 }}>{item.codigo}</td>
-                        <td style={{ fontWeight: 500 }}>{item.nombre}</td>
-                        <td style={{ textAlign: 'center', color: item.cantidad > 1 ? 'var(--text)' : 'var(--text3)' }}>
-                          {item.cantidad || 1}
-                        </td>
-                        <td style={{ color: 'var(--text2)', fontSize: 12 }}>
-                          {[item.marca, item.modelo].filter(Boolean).join(' ') || '—'}
-                        </td>
-                        <td style={{ color: 'var(--text2)' }}>{item.ubicacion || '—'}</td>
-                        <td style={{ color: 'var(--text3)', fontSize: 11 }}>{ruta}</td>
-                        <td><span className={`badge ${b.cls}`}>{b.label}</span></td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </>
+          </div>
         )}
       </div>
     </div>
   )
 }
 
-function SortTH({ label, col, sortKey, sortDir, onClick, align }) {
-  const active = sortKey === col
+function DetalleField({ label, value }) {
   return (
-    <th onClick={() => onClick(col)} style={{
-      cursor: 'pointer', userSelect: 'none',
-      textAlign: align || 'left',
-      color: active ? 'var(--text)' : undefined
-    }}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-        {label}
-        <i className={`ti ti-arrow-${active && sortDir === 'desc' ? 'down' : 'up'}`}
-          style={{ fontSize: 12, opacity: active ? 1 : 0.25 }} aria-hidden="true" />
-      </span>
-    </th>
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--text2)', fontWeight: 500, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 13, color: value ? 'var(--text)' : 'var(--text3)' }}>
+        {value ?? '—'}
+      </div>
+    </div>
   )
 }

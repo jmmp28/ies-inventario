@@ -55,6 +55,7 @@ export default function Inventario() {
   const [talleres, setTalleres] = useState([])
   const [categorias, setCategorias] = useState([])
   const [subcategorias, setSubcategorias] = useState([])
+  const [ubicacionesList, setUbicacionesList] = useState([])
   const [talleresF, setTalleresF] = useState([])
   const [categoriasF, setCategoriasF] = useState([])
   const [subcategoriasF, setSubcategoriasF] = useState([])
@@ -87,16 +88,18 @@ export default function Inventario() {
   }
 
   async function loadEstructura() {
-    const [d, t, c, s] = await Promise.all([
+    const [d, t, c, s, u] = await Promise.all([
       supabase.from('departamentos').select('id, nombre').eq('activo', true).order('nombre'),
       supabase.from('talleres').select('id, nombre, departamento_id').eq('activo', true).order('nombre'),
       supabase.from('categorias').select('id, nombre, taller_id').eq('activo', true).order('nombre'),
       supabase.from('subcategorias').select('id, nombre, categoria_id').eq('activo', true).order('nombre'),
+      supabase.from('ubicaciones').select('id, nombre').eq('activo', true).order('nombre'),
     ])
     setDepartamentos(d.data || [])
     setTalleres(t.data || [])
     setCategorias(c.data || [])
     setSubcategorias(s.data || [])
+    setUbicacionesList(u.data || [])
   }
 
   useEffect(() => { loadItems(); loadEstructura() }, [])
@@ -553,7 +556,14 @@ export default function Inventario() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <Field label="Núm. serie" value={form.numero_serie} onChange={v => setForm(f => ({...f, numero_serie: v}))} />
-                <Field label="Ubicación física" value={form.ubicacion} onChange={v => setForm(f => ({...f, ubicacion: v}))} />
+                <div className="form-group">
+                  <label className="form-label">Ubicación física</label>
+                  <select className="input-field" value={form.ubicacion || ''}
+                    onChange={e => setForm(f => ({...f, ubicacion: e.target.value}))}>
+                    <option value="">— Sin asignar —</option>
+                    {ubicacionesList.map(u => <option key={u.id} value={u.nombre}>{u.nombre}</option>)}
+                  </select>
+                </div>
               </div>
               <div className="form-group">
                 <label className="form-label">Estado</label>

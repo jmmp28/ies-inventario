@@ -68,6 +68,7 @@ export default function Inventario() {
   const [form, setForm] = useState(EMPTY_ITEM)
   const [sel, setSel] = useState(EMPTY_SEL)
   const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const [sortKey, setSortKey] = useState(null)
   const [sortDir, setSortDir] = useState('asc')
@@ -247,6 +248,27 @@ export default function Inventario() {
     if (!confirm('¿Eliminar este ítem? Esta acción no se puede deshacer.')) return
     await supabase.from('items').delete().eq('id', id)
     loadItems()
+  }
+
+  async function handleImageUpload(file) {
+    if (!file) return
+    if (file.size > 5 * 1024 * 1024) { setError('La imagen no puede superar 5 MB.'); return }
+    setUploading(true)
+    const ext = file.name.split('.').pop()
+    const path = `${Date.now()}.${ext}`
+    const { error: upErr } = await supabase.storage.from('items').upload(path, file, { upsert: true })
+    if (upErr) { setError('Error al subir imagen: ' + upErr.message); setUploading(false); return }
+    const { data } = supabase.storage.from('items').getPublicUrl(path)
+    setForm(f => ({ ...f, imagen_url: data.publicUrl }))
+    setUploading(false)
+  }
+
+  async function handleImageDelete() {
+    if (!form.imagen_url) return
+    // Extraer el path del nombre del archivo
+    const path = form.imagen_url.split('/items/').pop()
+    await supabase.storage.from('items').remove([path])
+    setForm(f => ({ ...f, imagen_url: null }))
   }
 
   // Opciones de filtro en cascada
@@ -437,14 +459,14 @@ export default function Inventario() {
             <table>
               <thead>
                 <tr>
+                  <th style={{ width: 40 }}></th>
                   <SortTH label="Código" col="codigo" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
                   <SortTH label="Nombre" col="nombre" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
                   <SortTH label="Cant." col="cantidad" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
                   <SortTH label="Ubicación" col="ubicacion" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
                   <SortTH label="Dept / Taller" col="deptTaller" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
                   <SortTH label="Estado" col="estado" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                  {canEdit && <th style={{ width: 80 }}></th>}
-                </tr>
+                  {canEdit && <th style={{ width: 80 }}></th>}                </tr>
               </thead>
               <tbody>
                 {sorted.map(item => {
@@ -453,6 +475,23 @@ export default function Inventario() {
                   const taller = item.subcategorias?.categorias?.talleres?.nombre
                   return (
                     <tr key={item.id}>
+                      <td style={{ width: 40, padding: '6px 8px' }}>
+                        {item.imagen_url ? (
+                          <a href={item.imagen_url} target="_blank" rel="noopener noreferrer"
+                            title="Ver imagen completa">
+                            <img src={item.imagen_url} alt={item.nombre}
+                              style={{ width: 32, height: 32, objectFit: 'cover',
+                                borderRadius: 6, border: '0.5px solid var(--border)',
+                                cursor: 'pointer', display: 'block' }} />
+                          </a>
+                        ) : (
+                          <div style={{ width: 32, height: 32, borderRadius: 6,
+                            background: 'var(--bg2)', border: '0.5px solid var(--border)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <i className="ti ti-photo" style={{ fontSize: 14, color: 'var(--text3)' }} aria-hidden="true" />
+                          </div>
+                        )}
+                      </td>
                       <td style={{ color: 'var(--text3)', fontFamily: 'monospace', fontSize: 12 }}>{item.codigo}</td>
                       <td style={{ fontWeight: 500 }}>{item.nombre}</td>
                       <td style={{ textAlign: 'center', color: item.cantidad > 1 ? 'var(--text)' : 'var(--text3)' }}>
@@ -605,6 +644,55 @@ export default function Inventario() {
                   onChange={e => setForm(f => ({...f, estado: e.target.value}))}>
                   {ESTADOS.map(e => <option key={e} value={e}>{ESTADO_BADGE[e].label}</option>)}
                 </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Imagen</label>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                  {/* Preview */}
+                  {form.imagen_url ? (
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <a href={form.imagen_url} target="_blank" rel="noopener noreferrer">
+                        <img src={form.imagen_url} alt="preview"
+                          style={{ width: 80, height: 80, objectFit: 'cover',
+                            borderRadius: 8, border: '0.5px solid var(--border)', display: 'block' }} />
+                      </a>
+                      {canEdit && (
+                        <button onClick={handleImageDelete}
+                          style={{ position: 'absolute', top: -6, right: -6,
+                            width: 20, height: 20, borderRadius: '50%',
+                            background: 'var(--red-dark)', border: 'none',
+                            color: '#fff', fontSize: 12, cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <i className="ti ti-x" aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ width: 80, height: 80, borderRadius: 8,
+                      border: '1px dashed var(--border2)', background: 'var(--bg2)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0 }}>
+                      <i className="ti ti-photo" style={{ fontSize: 24, color: 'var(--text3)' }} aria-hidden="true" />
+                    </div>
+                  )}
+                  {canEdit && (
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: 'block', cursor: 'pointer' }}>
+                        <div className="btn" style={{ fontSize: 12, display: 'inline-flex' }}>
+                          <i className="ti ti-upload" aria-hidden="true" />
+                          {uploading ? 'Subiendo…' : form.imagen_url ? 'Cambiar imagen' : 'Subir imagen'}
+                        </div>
+                        <input type="file" accept="image/*" style={{ display: 'none' }}
+                          onChange={e => handleImageUpload(e.target.files[0])}
+                          disabled={uploading} />
+                      </label>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+                        JPG, PNG, WebP · máx. 5 MB<br />
+                        Haz clic en la imagen para verla a tamaño completo
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="form-group">
                 <label className="form-label">Notas</label>

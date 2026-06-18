@@ -55,7 +55,8 @@ export default function Inventario() {
   const [talleres, setTalleres] = useState([])
   const [categorias, setCategorias] = useState([])
   const [subcategorias, setSubcategorias] = useState([])
-  const [ubicacionesList, setUbicacionesList] = useState([])
+  const [ubicacionesList, setUbicacionesList] = useState([]) // [{id, nombre, sublugares:[]}]
+  const [selectedUbicacionId, setSelectedUbicacionId] = useState('') // para el selector en cascada del modal
   const [talleresF, setTalleresF] = useState([])
   const [categoriasF, setCategoriasF] = useState([])
   const [subcategoriasF, setSubcategoriasF] = useState([])
@@ -93,7 +94,7 @@ export default function Inventario() {
       supabase.from('talleres').select('id, nombre, departamento_id').eq('activo', true).order('nombre'),
       supabase.from('categorias').select('id, nombre, taller_id').eq('activo', true).order('nombre'),
       supabase.from('subcategorias').select('id, nombre, categoria_id').eq('activo', true).order('nombre'),
-      supabase.from('ubicaciones').select('id, nombre').eq('activo', true).order('nombre'),
+      supabase.from('ubicaciones').select('id, nombre, sublugares(id, nombre, activo)').eq('activo', true).order('nombre'),
     ])
     setDepartamentos(d.data || [])
     setTalleres(t.data || [])
@@ -198,6 +199,7 @@ export default function Inventario() {
     } else {
       setForm(f => ({ ...f, subcategoria_id: s.subcategoria_id || '' }))
     }
+    setSelectedUbicacionId('')
     setModal('new')
   }
 
@@ -210,6 +212,12 @@ export default function Inventario() {
     const taller = cat ? talleres.find(t => t.id === cat.taller_id) : null
     const dept = taller ? departamentos.find(d => d.id === taller.departamento_id) : null
     applySel({ departamento_id: dept?.id||'', taller_id: taller?.id||'', categoria_id: cat?.id||'', subcategoria_id: item.subcategoria_id||'' })
+    // Intentar deducir la ubicación padre a partir del valor guardado
+    const ub = ubicacionesList.find(u =>
+      u.nombre === item.ubicacion ||
+      u.sublugares?.some(s => `${u.nombre} / ${s.nombre}` === item.ubicacion)
+    )
+    setSelectedUbicacionId(ub?.id || '')
     setModal('edit')
   }
 
@@ -557,14 +565,40 @@ export default function Inventario() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <Field label="Núm. serie" value={form.numero_serie} onChange={v => setForm(f => ({...f, numero_serie: v}))} />
                 <div className="form-group">
-                  <label className="form-label">Ubicación física</label>
-                  <select className="input-field" value={form.ubicacion || ''}
-                    onChange={e => setForm(f => ({...f, ubicacion: e.target.value}))}>
+                  <label className="form-label">Ubicación — Lugar</label>
+                  <select className="input-field" value={selectedUbicacionId}
+                    onChange={e => {
+                      const id = e.target.value
+                      setSelectedUbicacionId(id)
+                      const ub = ubicacionesList.find(u => u.id === id)
+                      setForm(f => ({ ...f, ubicacion: ub ? ub.nombre : '' }))
+                    }}>
                     <option value="">— Sin asignar —</option>
-                    {ubicacionesList.map(u => <option key={u.id} value={u.nombre}>{u.nombre}</option>)}
+                    {ubicacionesList.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}
                   </select>
                 </div>
               </div>
+              {/* Sublugar — solo si la ubicación tiene sublugares */}
+              {selectedUbicacionId && (() => {
+                const ub = ubicacionesList.find(u => u.id === selectedUbicacionId)
+                const subs = (ub?.sublugares || []).filter(s => s.activo)
+                if (subs.length === 0) return null
+                const currentSub = form.ubicacion?.startsWith(ub.nombre + ' / ')
+                  ? form.ubicacion.slice(ub.nombre.length + 3) : ''
+                return (
+                  <div className="form-group">
+                    <label className="form-label">Ubicación — Sublugar <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(opcional)</span></label>
+                    <select className="input-field" value={currentSub}
+                      onChange={e => {
+                        const sub = e.target.value
+                        setForm(f => ({ ...f, ubicacion: sub ? `${ub.nombre} / ${sub}` : ub.nombre }))
+                      }}>
+                      <option value="">— Solo el lugar principal —</option>
+                      {subs.map(s => <option key={s.id} value={s.nombre}>{s.nombre}</option>)}
+                    </select>
+                  </div>
+                )
+              })()}
               <div className="form-group">
                 <label className="form-label">Estado</label>
                 <select className="input-field" value={form.estado}

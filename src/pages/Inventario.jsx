@@ -73,6 +73,20 @@ export default function Inventario() {
   const [sortKey, setSortKey] = useState(null)
   const [sortDir, setSortDir] = useState('asc')
 
+  // Edición masiva
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [bulkModal, setBulkModal] = useState(false)
+  const [bulkSel, setBulkSel] = useState(EMPTY_SEL)
+  const [bulkTalleresF, setBulkTalleresF] = useState([])
+  const [bulkCategoriasF, setBulkCategoriasF] = useState([])
+  const [bulkSubcategoriasF, setBulkSubcategoriasF] = useState([])
+  const [bulkUbicacionId, setBulkUbicacionId] = useState('')
+  const [bulkSublugar, setBulkSublugar] = useState('')
+  const [bulkEstado, setBulkEstado] = useState('')
+  const [bulkSaving, setBulkSaving] = useState(false)
+  // Qué campos están "activados" para aplicar (checkbox junto a cada campo)
+  const [bulkApply, setBulkApply] = useState({ taxonomia: false, ubicacion: false, estado: false })
+
   async function loadItems() {
     setLoading(true)
     const { data } = await supabase.from('items').select(`
@@ -271,6 +285,84 @@ export default function Inventario() {
     setForm(f => ({ ...f, imagen_url: null }))
   }
 
+  // ── Selección y edición masiva ───────────────────────────
+  function toggleSelect(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  function toggleSelectAll() {
+    setSelectedIds(prev => {
+      if (prev.size === sorted.length) return new Set()
+      return new Set(sorted.map(i => i.id))
+    })
+  }
+  function clearSelection() { setSelectedIds(new Set()) }
+
+  function openBulkModal() {
+    setBulkSel(EMPTY_SEL)
+    setBulkTalleresF([]); setBulkCategoriasF([]); setBulkSubcategoriasF([])
+    setBulkUbicacionId(''); setBulkSublugar('')
+    setBulkEstado('')
+    setBulkApply({ taxonomia: false, ubicacion: false, estado: false })
+    setBulkModal(true)
+  }
+
+  function bulkOnSelDept(id) {
+    setBulkSel({ departamento_id: id, taller_id:'', categoria_id:'', subcategoria_id:'' })
+    setBulkTalleresF(talleres.filter(t => t.departamento_id === id))
+    setBulkCategoriasF([]); setBulkSubcategoriasF([])
+  }
+  function bulkOnSelTaller(id) {
+    setBulkSel(s => ({ ...s, taller_id: id, categoria_id:'', subcategoria_id:'' }))
+    setBulkCategoriasF(categorias.filter(c => c.taller_id === id))
+    setBulkSubcategoriasF([])
+  }
+  function bulkOnSelCategoria(id) {
+    setBulkSel(s => ({ ...s, categoria_id: id, subcategoria_id:'' }))
+    setBulkSubcategoriasF(subcategorias.filter(s => s.categoria_id === id))
+  }
+  function bulkOnSelSubcat(id) {
+    setBulkSel(s => ({ ...s, subcategoria_id: id }))
+  }
+
+  async function handleBulkSave() {
+    if (!bulkApply.taxonomia && !bulkApply.ubicacion && !bulkApply.estado) {
+      return // nada que aplicar
+    }
+    if (bulkApply.taxonomia && !bulkSel.subcategoria_id) {
+      alert('Selecciona la taxonomía completa (hasta subcategoría) o desactiva esa opción.')
+      return
+    }
+    setBulkSaving(true)
+    const payload = {}
+    if (bulkApply.taxonomia) payload.subcategoria_id = bulkSel.subcategoria_id
+    if (bulkApply.estado) payload.estado = bulkEstado
+    if (bulkApply.ubicacion) {
+      const ub = ubicacionesList.find(u => u.id === bulkUbicacionId)
+      payload.ubicacion = ub ? (bulkSublugar ? `${ub.nombre} / ${bulkSublugar}` : ub.nombre) : ''
+    }
+
+    const { error: err } = await supabase.from('items')
+      .update(payload)
+      .in('id', Array.from(selectedIds))
+
+    setBulkSaving(false)
+    if (err) { alert('Error al aplicar cambios: ' + err.message); return }
+    setBulkModal(false)
+    clearSelection()
+    loadItems()
+  }
+
+  async function handleBulkDelete() {
+    if (!confirm(`¿Eliminar ${selectedIds.size} ítems seleccionados? Esta acción no se puede deshacer.`)) return
+    await supabase.from('items').delete().in('id', Array.from(selectedIds))
+    clearSelection()
+    loadItems()
+  }
+
   // Opciones de filtro en cascada
   const talleresFiltro = filtroDept
     ? talleres.filter(t => t.departamento_id === filtroDept)
@@ -441,6 +533,27 @@ export default function Inventario() {
         )}
       </div>
 
+      {/* Barra de selección masiva */}
+      {canEdit && selectedIds.size > 0 && (
+        <div style={{ padding: '10px 24px', background: 'var(--primary-light)',
+          borderBottom: '0.5px solid var(--border)',
+          display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--primary-dark)' }}>
+            <i className="ti ti-checks" style={{ marginRight: 6 }} aria-hidden="true" />
+            {selectedIds.size} ítem{selectedIds.size !== 1 ? 's' : ''} seleccionado{selectedIds.size !== 1 ? 's' : ''}
+          </span>
+          <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={openBulkModal}>
+            <i className="ti ti-edit" aria-hidden="true" />Editar en masa
+          </button>
+          <button className="btn btn-danger" style={{ fontSize: 12 }} onClick={handleBulkDelete}>
+            <i className="ti ti-trash" aria-hidden="true" />Eliminar selección
+          </button>
+          <button className="btn" style={{ fontSize: 12, marginLeft: 'auto' }} onClick={clearSelection}>
+            <i className="ti ti-x" aria-hidden="true" />Deseleccionar todo
+          </button>
+        </div>
+      )}
+
       {/* Tabla */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
         {loading ? (
@@ -459,6 +572,14 @@ export default function Inventario() {
             <table>
               <thead>
                 <tr>
+                  {canEdit && (
+                    <th style={{ width: 32 }}>
+                      <input type="checkbox"
+                        checked={sorted.length > 0 && selectedIds.size === sorted.length}
+                        onChange={toggleSelectAll}
+                        style={{ cursor: 'pointer' }} />
+                    </th>
+                  )}
                   <th style={{ width: 40 }}></th>
                   <SortTH label="Código" col="codigo" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
                   <SortTH label="Nombre" col="nombre" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
@@ -474,7 +595,13 @@ export default function Inventario() {
                   const dept = item.subcategorias?.categorias?.talleres?.departamentos?.nombre
                   const taller = item.subcategorias?.categorias?.talleres?.nombre
                   return (
-                    <tr key={item.id}>
+                    <tr key={item.id} style={selectedIds.has(item.id) ? { background: 'var(--primary-light)' } : undefined}>
+                      {canEdit && (
+                        <td style={{ width: 32, padding: '6px 8px' }}>
+                          <input type="checkbox" checked={selectedIds.has(item.id)}
+                            onChange={() => toggleSelect(item.id)} style={{ cursor: 'pointer' }} />
+                        </td>
+                      )}
                       <td style={{ width: 40, padding: '6px 8px' }}>
                         {item.imagen_url ? (
                           <a href={item.imagen_url} target="_blank" rel="noopener noreferrer"
@@ -704,6 +831,129 @@ export default function Inventario() {
               <button className="btn" onClick={() => setModal(null)}>Cancelar</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
                 {saving ? 'Guardando…' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal edición masiva */}
+      {bulkModal && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setBulkModal(false)}>
+          <div className="modal">
+            <div className="modal-header">
+              <span>Editar {selectedIds.size} ítems en masa</span>
+              <button className="btn" style={{ padding: '3px 8px' }} onClick={() => setBulkModal(false)}>
+                <i className="ti ti-x" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div style={{ fontSize: 12, color: 'var(--text2)', background: 'var(--bg2)',
+                padding: '8px 12px', borderRadius: 'var(--radius)' }}>
+                <i className="ti ti-info-circle" style={{ marginRight: 6 }} aria-hidden="true" />
+                Marca solo los campos que quieras cambiar. Los campos sin marcar no se modifican.
+              </div>
+
+              {/* Taxonomía */}
+              <div style={{ border: '0.5px solid var(--border)', borderRadius: 'var(--radius)', padding: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: bulkApply.taxonomia ? 10 : 0 }}>
+                  <input type="checkbox" checked={bulkApply.taxonomia}
+                    onChange={e => setBulkApply(a => ({ ...a, taxonomia: e.target.checked }))} />
+                  <span style={{ fontSize: 13, fontWeight: 500 }}>Cambiar Departamento / Taller / Categoría / Subcategoría</span>
+                </label>
+                {bulkApply.taxonomia && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div className="form-group">
+                      <label className="form-label">Departamento</label>
+                      <select className="input-field" value={bulkSel.departamento_id} onChange={e => bulkOnSelDept(e.target.value)}>
+                        <option value="">— Selecciona —</option>
+                        {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Taller</label>
+                      <select className="input-field" value={bulkSel.taller_id}
+                        onChange={e => bulkOnSelTaller(e.target.value)} disabled={!bulkSel.departamento_id}>
+                        <option value="">— Selecciona —</option>
+                        {bulkTalleresF.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Categoría</label>
+                      <select className="input-field" value={bulkSel.categoria_id}
+                        onChange={e => bulkOnSelCategoria(e.target.value)} disabled={!bulkSel.taller_id}>
+                        <option value="">— Selecciona —</option>
+                        {bulkCategoriasF.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Subcategoría</label>
+                      <select className="input-field" value={bulkSel.subcategoria_id}
+                        onChange={e => bulkOnSelSubcat(e.target.value)} disabled={!bulkSel.categoria_id}>
+                        <option value="">— Selecciona —</option>
+                        {bulkSubcategoriasF.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Ubicación */}
+              <div style={{ border: '0.5px solid var(--border)', borderRadius: 'var(--radius)', padding: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: bulkApply.ubicacion ? 10 : 0 }}>
+                  <input type="checkbox" checked={bulkApply.ubicacion}
+                    onChange={e => setBulkApply(a => ({ ...a, ubicacion: e.target.checked }))} />
+                  <span style={{ fontSize: 13, fontWeight: 500 }}>Cambiar Ubicación</span>
+                </label>
+                {bulkApply.ubicacion && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div className="form-group">
+                      <label className="form-label">Lugar</label>
+                      <select className="input-field" value={bulkUbicacionId}
+                        onChange={e => { setBulkUbicacionId(e.target.value); setBulkSublugar('') }}>
+                        <option value="">— Sin asignar —</option>
+                        {ubicacionesList.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}
+                      </select>
+                    </div>
+                    {bulkUbicacionId && (() => {
+                      const ub = ubicacionesList.find(u => u.id === bulkUbicacionId)
+                      const subs = (ub?.sublugares || []).filter(s => s.activo)
+                      if (subs.length === 0) return null
+                      return (
+                        <div className="form-group">
+                          <label className="form-label">Sublugar <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(opcional)</span></label>
+                          <select className="input-field" value={bulkSublugar}
+                            onChange={e => setBulkSublugar(e.target.value)}>
+                            <option value="">— Solo el lugar principal —</option>
+                            {subs.map(s => <option key={s.id} value={s.nombre}>{s.nombre}</option>)}
+                          </select>
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* Estado */}
+              <div style={{ border: '0.5px solid var(--border)', borderRadius: 'var(--radius)', padding: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: bulkApply.estado ? 10 : 0 }}>
+                  <input type="checkbox" checked={bulkApply.estado}
+                    onChange={e => setBulkApply(a => ({ ...a, estado: e.target.checked }))} />
+                  <span style={{ fontSize: 13, fontWeight: 500 }}>Cambiar Estado</span>
+                </label>
+                {bulkApply.estado && (
+                  <select className="input-field" value={bulkEstado} onChange={e => setBulkEstado(e.target.value)}>
+                    <option value="">— Selecciona —</option>
+                    {ESTADOS.map(e => <option key={e} value={e}>{ESTADO_BADGE[e].label}</option>)}
+                  </select>
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setBulkModal(false)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={handleBulkSave}
+                disabled={bulkSaving || (!bulkApply.taxonomia && !bulkApply.ubicacion && !bulkApply.estado)}>
+                {bulkSaving ? 'Aplicando…' : `Aplicar a ${selectedIds.size} ítems`}
               </button>
             </div>
           </div>

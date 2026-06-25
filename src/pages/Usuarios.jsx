@@ -80,14 +80,14 @@ export default function Usuarios() {
         rol: form.rol,
         departamento_id: form.departamento_id || null,
         activo: true
-      })
+      }).catch(() => {})
 
-      // Confirmar email automáticamente via RPC
-      await supabase.rpc('confirm_user_email', { user_id: userId }).catch(() => {})
+      // Confirmar email automáticamente via RPC (sin bloquear)
+      supabase.rpc('confirm_user_email', { user_id: userId }).catch(() => {})
 
       setSaving(false)
       setModal(null)
-      setNuevoEmail(null) // ya no hace falta el aviso
+      setNuevoEmail(null)
       load()
 
     } else {

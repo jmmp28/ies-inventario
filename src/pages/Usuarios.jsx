@@ -82,9 +82,12 @@ export default function Usuarios() {
         activo: true
       })
 
+      // Confirmar email automáticamente via RPC
+      await supabase.rpc('confirm_user_email', { user_id: data.id }).catch(() => {})
+
       setSaving(false)
       setModal(null)
-      setNuevoEmail(form.email) // mostrar aviso con SQL a ejecutar
+      setNuevoEmail(null) // ya no hace falta el aviso
       load()
 
     } else {

@@ -89,7 +89,7 @@ export default function Usuarios() {
         }).catch(() => {})
         await supabase.rpc('confirm_user_email', { user_id: userId }).catch(() => {})
         load()
-      }, 500)
+      }, 2000)
 
     } else {
       const { error: err } = await supabase.from('perfiles').update({

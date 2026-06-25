@@ -66,15 +66,15 @@ export default function Usuarios() {
         body: JSON.stringify({ email: form.email, password: form.password })
       })
       const data = await res.json()
-
-      if (!data.id) {
+      const userId = data.id || data.user?.id
+      if (!userId) {
         setError('Error: ' + (data.msg || data.error_description || JSON.stringify(data)))
         setSaving(false); return
       }
 
       // Actualizar perfil con nombre, rol y departamento
       await supabase.from('perfiles').upsert({
-        id: data.id,
+        id: userId,
         nombre: form.nombre.trim(),
         apellidos: form.apellidos || null,
         rol: form.rol,
@@ -83,7 +83,7 @@ export default function Usuarios() {
       })
 
       // Confirmar email automáticamente via RPC
-      await supabase.rpc('confirm_user_email', { user_id: data.id }).catch(() => {})
+      await supabase.rpc('confirm_user_email', { user_id: userId }).catch(() => {})
 
       setSaving(false)
       setModal(null)

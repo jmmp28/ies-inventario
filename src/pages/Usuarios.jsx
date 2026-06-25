@@ -72,23 +72,24 @@ export default function Usuarios() {
         setSaving(false); return
       }
 
-      // Actualizar perfil con nombre, rol y departamento
-      await supabase.from('perfiles').upsert({
-        id: userId,
-        nombre: form.nombre.trim(),
-        apellidos: form.apellidos || null,
-        rol: form.rol,
-        departamento_id: form.departamento_id || null,
-        activo: true
-      }).catch(() => {})
-
-      // Confirmar email automáticamente via RPC (sin bloquear)
-      supabase.rpc('confirm_user_email', { user_id: userId }).catch(() => {})
-
+      // Cerrar modal inmediatamente — operaciones en segundo plano
       setSaving(false)
       setModal(null)
       setNuevoEmail(null)
-      load()
+
+      // Actualizar perfil y confirmar email en segundo plano
+      setTimeout(async () => {
+        await supabase.from('perfiles').upsert({
+          id: userId,
+          nombre: form.nombre.trim(),
+          apellidos: form.apellidos || null,
+          rol: form.rol,
+          departamento_id: form.departamento_id || null,
+          activo: true
+        }).catch(() => {})
+        await supabase.rpc('confirm_user_email', { user_id: userId }).catch(() => {})
+        load()
+      }, 500)
 
     } else {
       const { error: err } = await supabase.from('perfiles').update({
